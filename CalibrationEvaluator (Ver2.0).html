@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Calibration Interval Evaluation</title>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',Arial,sans-serif;background:#f1f5f9;direction:ltr}
+select,button,input{font-family:inherit}
+input[type=number]::-webkit-inner-spin-button{opacity:.4}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const {createElement:h,useState,useRef,useEffect,Fragment}=React;
+
+// ── Constants ──────────────────────────────────────────────────────────────────
+const RED="#dc2626",PASS_GREEN="#16a34a",FAIL_RED="#dc2626";
+const AUTO_BG="#f8fafc",INPUT_BG="#fff8f8",REF_BG="#fffbeb",REF_BORDER="#fde68a";
+
+const QUANTITIES=[
+  {sym:"V",label:"Voltage (V)"},{sym:"A",label:"Current (A)"},{sym:"Ω",label:"Resistance (Ω)"},
+  {sym:"g",label:"Mass (g)"},{sym:"N",label:"Force (N)"},{sym:"kgf",label:"Force (kgf)"},
+  {sym:"Pa",label:"Pressure (Pa)"},{sym:"bar",label:"Pressure (bar)"},
+  {sym:"°C",label:"Temperature (°C)"},{sym:"K",label:"Temperature (K)"},
+  {sym:"Hz",label:"Frequency (Hz)"},{sym:"s",label:"Time (s)"},{sym:"m",label:"Length (m)"},
+  {sym:"L",label:"Volume (L)"},{sym:"W",label:"Power (W)"},{sym:"lx",label:"Illuminance (lx)"},
+  {sym:"dB",label:"Level (dB)"},{sym:"pH",label:"pH"},{sym:"%RH",label:"Humidity (%RH)"},
+  {sym:"rpm",label:"Speed (rpm)"},{sym:"cd",label:"Luminous int. (cd)"},{sym:"mol",label:"Amount (mol)"}
+];
+const PREFIXES=[
+  {sym:"G",label:"Giga (G)"},{sym:"M",label:"Mega (M)"},{sym:"k",label:"Kilo (k)"},
+  {sym:"",label:"— (none)"},{sym:"m",label:"Milli (m)"},{sym:"μ",label:"Micro (μ)"},
+  {sym:"n",label:"Nano (n)"},{sym:"p",label:"Pico (p)"}
+];
+const DURATION_OPTS=[{v:1,label:"1 – דקות בודדות"},{v:2,label:"2 – עד שעה"},{v:3,label:"3 – כמה שעות"},{v:4,label:"4 – רוב היום"},{v:5,label:"5 – עבודה רציפה"}];
+const FREQ_OPTS=[{v:1,label:"1 – שבועי"},{v:2,label:"2 – כמה פעמים בשבוע"},{v:3,label:"3 – יומי"},{v:4,label:"4 – רוב היום"},{v:5,label:"5 – עבודה רציפה"}];
+const ENV_FIXED=[{v:1,label:"1 – מעבדה מבוקרת"},{v:2,label:"2 – שימוש רגיל"},{v:3,label:"3 – תנאים משתנים"},{v:4,label:"4 – שטח"},{v:5,label:"5 – שטח/עומס קיצוני"}];
+const ENV_MOBILE=[{v:2,label:"2 – מעבדה מבוקרת"},{v:3,label:"3 – שימוש רגיל"},{v:4,label:"4 – תנאים משתנים"},{v:5,label:"5 – שטח/עומס קיצוני"}];
+const MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
+const DAYS=["Su","Mo","Tu","We","Th","Fr","Sa"];
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+function rnd(v,d=0){return Math.round(v*10**d)/10**d}
+function fmt(v,d=4){if(v===null||v===undefined||isNaN(v))return"—";return Number(v).toFixed(d)}
+function unitLabel(range){return`${range.prefix||""}${range.quantity}`}
+function parseDMY(str){if(!str)return null;const p=str.split("/");if(p.length!==3)return null;const d=parseInt(p[0]),m=parseInt(p[1])-1,y=parseInt(p[2]);if(isNaN(d)||isNaN(m)||isNaN(y))return null;return new Date(y,m,d)}
+function formatDMY(date){if(!date)return"";return`${String(date.getDate()).padStart(2,"0")}/${String(date.getMonth()+1).padStart(2,"0")}/${date.getFullYear()}`}
+const uid=()=>Math.random().toString(36).slice(2);
+
+// ── Data factories ─────────────────────────────────────────────────────────────
+const newSharedRow=()=>({id:uid(),calibrationDate:"",certNo:""});
+const newRangeRow=()=>({id:uid(),measuredValue:"",timeInterval:"1",adjustment:"0",tolerance:"",uncertainty:"",duration:"2",frequency:"1",environment:"1"});
+const newRange=(label,sr)=>({id:uid(),label,quantity:"V",prefix:"",decimals:4,tolPrefix:"",tolDecimals:4,uncPrefix:"",uncDecimals:4,rows:sr.map(()=>newRangeRow())});
+
+// ── Calculation ────────────────────────────────────────────────────────────────
+function calcRow(row,prevMeasured,isRef){
+  if(isRef)return{isRef:true,drift:null,driftPerYear:null,tur:null,usageScore:null,riskScore:null,driftLtUnc:null,decision:null,failReasons:[]};
+  const m=parseFloat(row.measuredValue),p=prevMeasured,ti=parseFloat(row.timeInterval);
+  const tol=parseFloat(row.tolerance),unc=parseFloat(row.uncertainty);
+  const adj=parseInt(row.adjustment)||0,dur=parseInt(row.duration)||1,freq=parseInt(row.frequency)||1,env=parseInt(row.environment)||1;
+  const drift=(!isNaN(m)&&p!==undefined&&!isNaN(p))?m-p:null;
+  const driftPerYear=(drift!==null&&!isNaN(ti)&&ti!==0)?drift/ti:null;
+  const tur=(!isNaN(tol)&&!isNaN(unc)&&unc!==0)?tol/unc:null;
+  const usageScore=rnd((dur+freq)/2,0),riskScore=rnd((usageScore+env)/2,0);
+  const driftLtUnc=(drift!==null&&!isNaN(unc))?(Math.abs(drift)<=unc?"YES":"NO"):null;
+  const failReasons=[];
+  let decision=null;
+  if(drift!==null&&tur!==null&&!isNaN(unc)){
+    if(adj!==0)failReasons.push("Adjustment was performed (ADJUSTMENT = 1)");
+    if(tur<3)failReasons.push(`TUR = ${fmt(tur,2)} < 3`);
+    if(Math.abs(drift)>unc)failReasons.push(`|Drift| = ${fmt(Math.abs(drift),4)} > Uncertainty = ${fmt(unc,4)}`);
+    if(env>2)failReasons.push(`Environment = ${env} > 2`);
+    if(usageScore>2)failReasons.push(`Usage score = ${usageScore} > 2`);
+    if(riskScore>2)failReasons.push(`Risk score = ${riskScore} > 2`);
+    decision=failReasons.length===0?"PASS":"FAIL";
+  }
+  return{isRef:false,drift,driftPerYear,tur,usageScore,riskScore,driftLtUnc,decision,failReasons,adj,env};
+}
+
+// ── Report HTML ────────────────────────────────────────────────────────────────
+function buildReport({equipmentId,equipmentType,sharedRows,ranges,allRangesCalc,rangePassStatus,globalAllPass,preparedBy,orgName,reportDate}){
+  const certRows=sharedRows.map((sr,i)=>`<tr style="background:${i===0?"#fffbeb":i%2===0?"#fff":"#f9fafb"}"><td style="padding:5px 10px;border:1px solid #ddd;font-weight:700;color:${i===0?"#92400e":"#333"}">${i===0?"REF":i}</td><td style="padding:5px 10px;border:1px solid #ddd">${sr.calibrationDate||"—"}</td><td style="padding:5px 10px;border:1px solid #ddd">${sr.certNo||"—"}</td><td style="padding:5px 10px;border:1px solid #ddd;color:#555;font-style:italic">${i===0?"Reference year – base for comparison":`Comparison ${i}: compared against row ${i-1}`}</td></tr>`).join("");
+  const rangeSummary=ranges.map((rng,ri)=>{const s=rangePassStatus[ri],c=s==="pass"?"#16a34a":s==="fail"?"#dc2626":"#999";return`<tr><td style="padding:6px 10px;border:1px solid #ddd;font-weight:600">${rng.label} [${unitLabel(rng)}]</td><td style="padding:6px 10px;border:1px solid #ddd;text-align:center;font-weight:800;color:${c}">${s==="pass"?"✓ PASS":s==="fail"?"✗ FAIL":"—"}</td></tr>`;}).join("");
+  const verdict=globalAllPass
+    ?`<div style="background:#f0fdf4;border:2px solid #16a34a;border-radius:10px;padding:20px 24px;margin:16px 0"><div style="font-size:17px;font-weight:800;color:#16a34a;margin-bottom:8px">✓ CONCLUSION: Calibration Interval Extension APPROVED</div><p style="font-size:12px;color:#166534;line-height:1.7;margin-bottom:6px">All measurement ranges demonstrated stable performance. All six decision criteria were satisfied for every range and every comparison period.</p><p style="font-size:12px;color:#166534;font-weight:700">Equipment ID: <u>${equipmentId||"N/A"}</u> — calibration interval may be extended by one (1) additional year.</p></div>`
+    :`<div style="background:#fef2f2;border:2px solid #dc2626;border-radius:10px;padding:20px 24px;margin:16px 0"><div style="font-size:17px;font-weight:800;color:#dc2626;margin-bottom:8px">✗ CONCLUSION: Calibration Interval Extension NOT APPROVED</div><p style="font-size:12px;color:#991b1b;line-height:1.7;margin-bottom:6px">One or more ranges did not satisfy all decision criteria. The interval cannot be extended.</p><p style="font-size:12px;color:#991b1b;font-weight:700">Equipment ID: <u>${equipmentId||"N/A"}</u> must be calibrated at the standard interval.</p></div>`;
+  const rangeDetails=ranges.map((rng,ri)=>{
+    const rCalc=allRangesCalc[ri],status=rangePassStatus[ri],sc=status==="pass"?"#16a34a":"#dc2626",sbg=status==="pass"?"#f0fdf4":"#fef2f2";
+    const unit=unitLabel(rng),dec=rng.decimals;
+    const dataRows=sharedRows.map((shared,i)=>{
+      const isRef=i===0,calc=rCalc[i],rrow=rng.rows[i];
+      const prevVal=i>0&&rng.rows[i-1].measuredValue!==""?Number(rng.rows[i-1].measuredValue).toFixed(dec):"—";
+      const dc=calc.decision==="PASS"?"#16a34a":calc.decision==="FAIL"?"#dc2626":"#999";
+      const measD=rrow.measuredValue!==""&&!isNaN(parseFloat(rrow.measuredValue))?`${Number(rrow.measuredValue).toFixed(dec)} ${unit}`:"—";
+      const tolD=rrow.tolerance!==""&&!isNaN(parseFloat(rrow.tolerance))?`${Number(rrow.tolerance).toFixed(rng.tolDecimals)} ${rng.tolPrefix}${rng.quantity}`:(rrow.tolerance||"—");
+      const uncD=rrow.uncertainty!==""&&!isNaN(parseFloat(rrow.uncertainty))?`${Number(rrow.uncertainty).toFixed(rng.uncDecimals)} ${rng.uncPrefix}${rng.quantity}`:(rrow.uncertainty||"—");
+      return`<tr style="background:${isRef?"#fffbeb":i%2===0?"#fff":"#f9fafb"}"><td style="padding:5px 7px;border:1px solid #e2e8f0;font-weight:700;color:${isRef?"#92400e":"#555"}">${isRef?"REF":i}</td><td style="padding:5px 7px;border:1px solid #e2e8f0">${shared.calibrationDate||"—"}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:right">${measD}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:right;color:#1e40af;font-style:italic">${isRef?"—":prevVal!=="—"?`${prevVal} ${unit}`:"—"}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:right">${isRef?"—":calc.drift!==null?`${fmt(calc.drift,dec)} ${unit}`:"—"}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:right">${isRef?"—":calc.driftPerYear!==null?fmt(calc.driftPerYear,dec):"—"}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:right">${isRef?"—":tolD}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:right">${isRef?"—":uncD}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:center;font-weight:700;color:${calc.tur!==null?(calc.tur>=3?"#16a34a":"#dc2626"):"#999"}">${isRef?"—":fmt(calc.tur,2)}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:center">${isRef?"—":rrow.adjustment}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:center;font-weight:600;color:${!isRef&&calc.usageScore>2?"#dc2626":"#16a34a"}">${isRef?"—":(calc.usageScore??"-")}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:center;font-weight:600;color:${!isRef&&calc.riskScore>2?"#dc2626":"#16a34a"}">${isRef?"—":(calc.riskScore??"-")}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:center;font-weight:700;color:${calc.driftLtUnc==="YES"?"#16a34a":calc.driftLtUnc==="NO"?"#dc2626":"#999"}">${isRef?"—":(calc.driftLtUnc||"—")}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:center;font-weight:800;color:${dc}">${isRef?"—":(calc.decision||"—")}</td><td style="padding:5px 7px;border:1px solid #e2e8f0">${shared.certNo||"—"}</td></tr>`;
+    }).join("");
+    const rowAnalysis=rCalc.slice(1).map((calc,idx)=>{
+      const rowNum=idx+1,shared=sharedRows[rowNum];
+      if(!calc.decision)return"";
+      if(calc.decision==="PASS"){const uRow=rng.rows[rowNum];const uncD=uRow?.uncertainty!==""&&!isNaN(parseFloat(uRow?.uncertainty))?`${Number(uRow.uncertainty).toFixed(rng.uncDecimals)} ${rng.uncPrefix}${rng.quantity}`:(uRow?.uncertainty||"—");return`<div style="margin-top:6px;padding:8px 12px;background:#f0fdf4;border-left:3px solid #16a34a;border-radius:4px;font-size:11px;line-height:1.7"><strong>Row ${rowNum} (${shared.calibrationDate||"—"}) — PASS:</strong> No adj · TUR=${fmt(calc.tur,2)} ≥ 3 · |Drift|=${fmt(Math.abs(calc.drift),dec)} ${unit} ≤ Unc ${uncD} · Env=${calc.env} ≤ 2 · Usage=${calc.usageScore} ≤ 2 · Risk=${calc.riskScore} ≤ 2</div>`;}
+      return`<div style="margin-top:6px;padding:8px 12px;background:#fef2f2;border-left:3px solid #dc2626;border-radius:4px;font-size:11px"><strong>Row ${rowNum} (${shared.calibrationDate||"—"}) — FAIL:</strong><ul style="margin:4px 0 0 18px;padding:0;line-height:1.8">${calc.failReasons.map(r=>`<li>${r}</li>`).join("")}</ul></div>`;
+    }).join("");
+    return`<div style="margin-bottom:28px;page-break-inside:avoid"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;padding:10px 14px;background:${sbg};border:1.5px solid ${sc};border-radius:8px"><h3 style="margin:0;font-size:14px">${rng.label} <span style="font-size:11px;font-weight:400;color:#475569">[${unit}]</span></h3><span style="font-size:13px;font-weight:800;color:${sc}">${status==="pass"?"✓ ALL PASS":"✗ FAIL"}</span></div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="background:#0f172a;color:#e2e8f0"><th style="padding:6px 7px;border:1px solid #1e293b">#</th><th style="padding:6px 7px;border:1px solid #1e293b">Date</th><th style="padding:6px 7px;border:1px solid #1e293b">Measured (${unit})</th><th style="padding:6px 7px;border:1px solid #1e293b">Previous</th><th style="padding:6px 7px;border:1px solid #1e293b">Drift</th><th style="padding:6px 7px;border:1px solid #1e293b">Drift/Yr</th><th style="padding:6px 7px;border:1px solid #1e293b">Tolerance [${rng.tolPrefix}${rng.quantity}]</th><th style="padding:6px 7px;border:1px solid #1e293b">Uncertainty [${rng.uncPrefix}${rng.quantity}]</th><th style="padding:6px 7px;border:1px solid #1e293b">TUR</th><th style="padding:6px 7px;border:1px solid #1e293b">Adj</th><th style="padding:6px 7px;border:1px solid #1e293b">Usage</th><th style="padding:6px 7px;border:1px solid #1e293b">Risk</th><th style="padding:6px 7px;border:1px solid #1e293b">D&lt;U</th><th style="padding:6px 7px;border:1px solid #1e293b">Decision</th><th style="padding:6px 7px;border:1px solid #1e293b">Cert.NO</th></tr></thead><tbody>${dataRows}</tbody></table></div>${rowAnalysis?`<div style="margin-top:10px"><strong style="font-size:11px;color:#475569;display:block;margin-bottom:4px">Row-by-row analysis:</strong>${rowAnalysis}</div>`:""}</div>`;
+  }).join("");
+  const today=reportDate||new Date().toLocaleDateString("en-GB");
+  return`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Calibration Report – ${equipmentId||"Equipment"}</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;color:#0f172a;background:#fff;font-size:12px}.page{max-width:860px;margin:0 auto;padding:32px 36px}h2{font-size:13px;font-weight:700;border-bottom:2px solid #0f172a;padding-bottom:4px;margin:22px 0 10px;text-transform:uppercase;letter-spacing:.04em}.mg{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}.mi{background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px}.mi label{display:block;font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px}.mi span{font-size:12px;font-weight:600}.fml{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:6px}.fml td{padding:4px 8px;border:1px solid #e2e8f0}.fml td:first-child{font-weight:600;background:#f8fafc;width:32%}ul.crit{margin:0;padding:0 0 0 18px;font-size:11px;line-height:1.9;color:#334155}.sig{border:1px solid #e2e8f0;border-radius:8px;padding:16px 20px;margin-top:8px}.sl{border-top:1px solid #334155;margin-top:30px;width:200px;font-size:10px;color:#555;padding-top:4px}.disc{font-size:10px;color:#94a3b8;margin-top:20px;border-top:1px solid #e2e8f0;padding-top:10px;line-height:1.6}@media print{.noprint{display:none!important}.page{padding:16px 20px}}</style></head><body><div class="noprint" style="background:#1e40af;padding:12px 24px;display:flex;align-items:center;justify-content:space-between"><span style="color:#fff;font-weight:700;font-size:14px">Calibration Interval Evaluation Report</span><button onclick="window.print()" style="background:#fff;color:#1e40af;border:none;border-radius:8px;padding:9px 22px;font-size:13px;font-weight:700;cursor:pointer">🖨 Print / Save as PDF</button></div><div class="page"><div style="border-bottom:3px solid #0f172a;padding-bottom:14px;margin-bottom:18px"><div style="font-size:20px;font-weight:800">CALIBRATION INTERVAL EVALUATION REPORT</div><div style="font-size:10px;color:#64748b">ISO/IEC 17025:2017 · ILAC G24 / OIML D10 · JCGM 100 (GUM)</div></div><h2>1. Instrument Identification</h2><div class="mg"><div class="mi"><label>Equipment ID</label><span>${equipmentId||"—"}</span></div><div class="mi"><label>Equipment Type</label><span>${equipmentType==="mobile"?"Mobile (ציוד נייד)":"Stationary (ציוד נייח)"}</span></div><div class="mi"><label>Report Date</label><span>${today}</span></div><div class="mi"><label>Years Evaluated</label><span>${sharedRows.length-1} comparison + 1 reference</span></div><div class="mi"><label>Ranges</label><span>${ranges.length} (${ranges.map(r=>`${r.label} [${unitLabel(r)}]`).join(", ")})</span></div><div class="mi"><label>Prepared By</label><span>${preparedBy||"—"}</span></div><div class="mi" style="grid-column:1/-1"><label>Organization</label><span>${orgName||"—"}</span></div></div><div style="background:#f0fdf4;border:1.5px solid #86efac;border-radius:8px;padding:10px 16px;margin:0 0 16px;font-size:11px;display:flex;align-items:center;gap:10px"><span style="font-size:18px">✓</span><div><strong style="color:#16a34a">Certificate Exceedances: None reported</strong><br><span style="color:#166534">The operator confirmed that no exceedances exist in any of the calibration certificates evaluated.</span></div></div><h2>2. Calibration Certificates Referenced</h2><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="background:#f1f5f9"><th style="padding:6px 10px;border:1px solid #ddd;text-align:left">#</th><th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Date</th><th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Certificate No.</th><th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Role</th></tr></thead><tbody>${certRows}</tbody></table><h2>3. Evaluation Result</h2>${verdict}<table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:10px"><thead><tr style="background:#f1f5f9"><th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Range</th><th style="padding:6px 10px;border:1px solid #ddd;text-align:center">Result</th></tr></thead><tbody>${rangeSummary}</tbody></table><h2>4. Methodology</h2><p style="font-size:11px;color:#334155;line-height:1.7;margin-bottom:10px">Follows <strong>ISO/IEC 17025:2017</strong> (Clauses 6.4.7, 7.6, 7.7, 7.8.6), <strong>ILAC G24/OIML D10</strong>, and <strong>JCGM 100:2008 (GUM)</strong>. Extension approved only when all criteria satisfied for all ranges and all periods.</p><table class="fml"><tr><td>Drift</td><td>Measured<sub>n</sub> − Measured<sub>n−1</sub></td></tr><tr><td>Drift per Year</td><td>Drift ÷ Time Interval (years)</td></tr><tr><td>TUR</td><td>Tolerance ÷ Uncertainty</td></tr><tr><td>Usage score</td><td>ROUND((Duration + Frequency) ÷ 2, 0)</td></tr><tr><td>Risk score</td><td>ROUND((Usage score + Environment) ÷ 2, 0)</td></tr></table><p style="font-size:11px;font-weight:700;margin:10px 0 5px">FAIL conditions (any single condition triggers FAIL):</p><ul class="crit"><li><strong>ADJUSTMENT = 1</strong> — Adjustment performed between calibrations</li><li><strong>TUR &lt; 3</strong> — Insufficient test uncertainty ratio</li><li><strong>|Drift| &gt; Uncertainty</strong> — Drift exceeds measurement uncertainty</li><li><strong>Environment &gt; 2</strong> — Harsh operating environment</li><li><strong>Usage score &gt; 2</strong> — Intensive use</li><li><strong>Risk score &gt; 2</strong> — High combined risk index</li></ul><h2>5. Detailed Results by Range</h2>${rangeDetails}<h2>6. Authorization</h2><div class="sig"><div style="display:grid;grid-template-columns:1fr 1fr;gap:28px"><div><div class="sl">Prepared by: ${preparedBy||"________________________"}</div><div style="font-size:10px;color:#555;margin-top:8px">Title: ________________________</div><div style="font-size:10px;color:#555;margin-top:6px">Date: ${today}</div></div><div><div class="sl">Reviewed / Approved by: ________________________</div><div style="font-size:10px;color:#555;margin-top:8px">Title: ________________________</div><div style="font-size:10px;color:#555;margin-top:6px">Date: ________________________</div></div></div></div><div class="disc">Generated by the Calibration Interval Evaluation System. Based on user-entered data. For inclusion in the instrument's calibration file (תיק צב"ד) and presentation to ANAB/ILAC auditors. The laboratory retains full responsibility for data accuracy and accreditation compliance.</div></div></body></html>`;
+}
+
+// ── DatePicker ─────────────────────────────────────────────────────────────────
+function DatePicker({value,onChange,placeholder="DD/MM/YYYY",inputStyle={}}){
+  const[open,setOpen]=useState(false);
+  const parsed=parseDMY(value);
+  const today=new Date();
+  const[viewYear,setViewYear]=useState(parsed?parsed.getFullYear():today.getFullYear());
+  const[viewMonth,setViewMonth]=useState(parsed?parsed.getMonth():today.getMonth());
+  const ref=useRef(null);
+  useEffect(()=>{
+    const h=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false)};
+    document.addEventListener("mousedown",h);
+    return()=>document.removeEventListener("mousedown",h);
+  },[]);
+  const dim=(y,m)=>new Date(y,m+1,0).getDate();
+  const fd=(y,m)=>new Date(y,m,1).getDay();
+  const prev=()=>{if(viewMonth===0){setViewMonth(11);setViewYear(y=>y-1)}else setViewMonth(m=>m-1)};
+  const next=()=>{if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1)}else setViewMonth(m=>m+1)};
+  const sel=d=>{onChange(formatDMY(new Date(viewYear,viewMonth,d)));setOpen(false)};
+  const cells=[];
+  for(let i=0;i<fd(viewYear,viewMonth);i++)cells.push(null);
+  for(let d=1;d<=dim(viewYear,viewMonth);d++)cells.push(d);
+  while(cells.length%7!==0)cells.push(null);
+  const isSel=d=>parsed&&d&&parsed.getFullYear()===viewYear&&parsed.getMonth()===viewMonth&&parsed.getDate()===d;
+  const isTod=d=>d&&today.getFullYear()===viewYear&&today.getMonth()===viewMonth&&today.getDate()===d;
+  const S={position:"relative",display:"inline-block",width:"100%"};
+  const calS={position:"absolute",top:"100%",left:0,zIndex:9999,background:"#fff",border:"1px solid #cbd5e1",borderRadius:10,boxShadow:"0 8px 32px rgba(0,0,0,.18)",padding:10,minWidth:220,marginTop:2};
+  return h("div",{ref,style:S},
+    h("div",{style:{display:"flex",alignItems:"center",width:"100%"}},
+      h("input",{readOnly:true,value,placeholder,onClick:()=>setOpen(o=>!o),style:{...inputStyle,cursor:"pointer",paddingRight:22,boxSizing:"border-box"}}),
+      h("span",{onClick:()=>setOpen(o=>!o),style:{position:"absolute",right:4,cursor:"pointer",fontSize:13,color:"#64748b",pointerEvents:"none"}},"📅")
+    ),
+    open&&h("div",{style:calS},
+      h("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}},
+        h("button",{onClick:prev,style:{background:"none",border:"none",cursor:"pointer",fontSize:16,color:"#475569",padding:"0 4px"}},"‹"),
+        h("span",{style:{fontWeight:700,fontSize:12,color:"#0f172a"}},MONTHS[viewMonth]+" "+viewYear),
+        h("button",{onClick:next,style:{background:"none",border:"none",cursor:"pointer",fontSize:16,color:"#475569",padding:"0 4px"}},"›")
+      ),
+      h("div",{style:{display:"flex",justifyContent:"center",gap:4,marginBottom:8}},
+        [viewYear-2,viewYear-1,viewYear,viewYear+1,viewYear+2].map(y=>h("button",{key:y,onClick:()=>setViewYear(y),style:{fontSize:10,padding:"2px 5px",border:"1px solid",borderColor:y===viewYear?"#2563eb":"#e2e8f0",borderRadius:4,background:y===viewYear?"#2563eb":"#fff",color:y===viewYear?"#fff":"#475569",cursor:"pointer",fontWeight:y===viewYear?700:400}},y))
+      ),
+      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:4}},
+        DAYS.map(d=>h("div",{key:d,style:{textAlign:"center",fontSize:10,fontWeight:700,color:"#94a3b8"}},d))
+      ),
+      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}},
+        cells.map((d,idx)=>h("button",{key:idx,onClick:()=>d&&sel(d),style:{textAlign:"center",fontSize:11,padding:"4px 2px",border:"none",borderRadius:5,cursor:d?"pointer":"default",background:isSel(d)?"#2563eb":isTod(d)?"#eff6ff":"transparent",color:!d?"transparent":isSel(d)?"#fff":isTod(d)?"#2563eb":"#334155",fontWeight:isSel(d)||isTod(d)?700:400}},d||""))
+      ),
+      h("div",{style:{marginTop:8,textAlign:"center"}},
+        h("button",{onClick:()=>{const t=new Date();setViewYear(t.getFullYear());setViewMonth(t.getMonth());sel(t.getDate())},style:{fontSize:11,color:"#2563eb",background:"none",border:"none",cursor:"pointer",fontWeight:600}},"Today"),
+        h("button",{onClick:()=>{onChange("");setOpen(false)},style:{fontSize:11,color:"#94a3b8",background:"none",border:"none",cursor:"pointer",marginLeft:10}},"Clear")
+      )
+    )
+  );
+}
+
+// ── Main App ───────────────────────────────────────────────────────────────────
+function App(){
+  const[equipmentId,setEquipmentId]=useState("");
+  const[equipmentType,setEquipmentType]=useState("fixed");
+  const[sharedRows,setSharedRows]=useState(()=>[newSharedRow(),newSharedRow(),newSharedRow()]);
+  const[ranges,setRanges]=useState(()=>[newRange("Range 1",[null,null,null])]);
+  const[activeRange,setActiveRange]=useState(0);
+  const[showModal,setShowModal]=useState(false);
+  const[preparedBy,setPreparedBy]=useState("");
+  const[orgName,setOrgName]=useState("");
+  const[reportDate,setReportDate]=useState(()=>new Date().toLocaleDateString("en-GB"));
+  const[view,setView]=useState("main");
+  const[reportHtml,setReportHtml]=useState("");
+  const[hasExceedance,setHasExceedance]=useState(null);
+
+  const envOpts=equipmentType==="mobile"?ENV_MOBILE:ENV_FIXED;
+
+  function syncRangeRows(ns,cr){return cr.map(range=>({...range,rows:ns.map((_,i)=>range.rows[i]||newRangeRow())}))}
+  function addSharedRow(){if(sharedRows.length>=6)return;const s=[...sharedRows,newSharedRow()];setSharedRows(s);setRanges(rs=>syncRangeRows(s,rs))}
+  function removeSharedRow(idx){if(sharedRows.length<=2||idx===0)return;const s=sharedRows.filter((_,i)=>i!==idx);setSharedRows(s);setRanges(rs=>syncRangeRows(s,rs))}
+  function updateShared(idx,field,val){setSharedRows(rs=>rs.map((r,i)=>i===idx?{...r,[field]:val}:r))}
+  function updateRangeRow(ri,rowIdx,field,val){
+    setRanges(rs=>rs.map((range,r)=>{
+      if(r!==ri)return range;
+      if(rowIdx===0&&(field==="tolerance"||field==="uncertainty")){
+        const cv=range.rows[0][field];
+        return{...range,rows:range.rows.map((row,rowi)=>{if(rowi===0)return{...row,[field]:val};if(row[field]===""||row[field]===cv)return{...row,[field]:val};return row;})};
+      }
+      return{...range,rows:range.rows.map((row,rowi)=>rowi!==rowIdx?row:{...row,[field]:val})};
+    }));
+  }
+  function updateRange(ri,field,val){setRanges(rs=>rs.map((r,i)=>i!==ri?r:{...r,[field]:val}))}
+  function addRange(){const l=`Range ${ranges.length+1}`;setRanges(rs=>[...rs,newRange(l,sharedRows)]);setActiveRange(ranges.length)}
+  function removeRange(idx){if(ranges.length<=1)return;setRanges(rs=>rs.filter((_,i)=>i!==idx));setActiveRange(prev=>Math.min(prev,ranges.length-2))}
+  function updateRangeLabel(idx,label){setRanges(rs=>rs.map((r,i)=>i===idx?{...r,label}:r))}
+
+  const range=ranges[activeRange],dec=range.decimals,unit=unitLabel(range);
+  const calculated=sharedRows.map((_,i)=>calcRow(range.rows[i],i>0?parseFloat(range.rows[i-1].measuredValue):undefined,i===0));
+  const allRangesCalc=ranges.map(rng=>sharedRows.map((_,i)=>calcRow(rng.rows[i],i>0?parseFloat(rng.rows[i-1].measuredValue):undefined,i===0)));
+  const allCompDecisions=allRangesCalc.flatMap(rCalc=>rCalc.slice(1).map(c=>c.decision));
+  const hasAnyDecision=allCompDecisions.some(d=>d!==null);
+  const globalAllPass=hasAnyDecision&&allCompDecisions.every(d=>d==="PASS");
+  const rangePassStatus=allRangesCalc.map(rCalc=>{const comp=rCalc.slice(1);if(!comp.some(c=>c.decision!==null))return"incomplete";return comp.every(c=>c.decision==="PASS")?"pass":"fail"});
+
+  function generateAndShow(){
+    const html=buildReport({equipmentId,equipmentType,sharedRows,ranges,allRangesCalc,rangePassStatus,globalAllPass,preparedBy,orgName,reportDate,hasExceedance});
+    setReportHtml(html);setShowModal(false);setView("report");
+  }
+  function downloadHtml(){
+    const blob=new Blob([reportHtml],{type:"text/html"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");a.href=url;a.download=`CalibrationReport_${equipmentId||"Equipment"}.html`;
+    document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
+  }
+
+  // ── Styles ──────────────────────────────────────────────────────────────────
+  const thB=(red=false)=>({padding:"7px 8px",fontSize:11,fontWeight:700,textAlign:"center",background:"#0f172a",color:red?"#ff6b6b":"#e2e8f0",border:"1px solid #1e293b",whiteSpace:"nowrap",verticalAlign:"bottom"});
+  const tdA={padding:"5px 6px",background:AUTO_BG,border:"1px solid #e2e8f0",textAlign:"center",fontSize:12,color:"#334155"};
+  const tdI={padding:"3px 4px",background:INPUT_BG,border:"1px solid #fca5a5",textAlign:"center"};
+  const tdR={padding:"3px 4px",background:REF_BG,border:`1px solid ${REF_BORDER}`,textAlign:"center"};
+  const inp={width:"100%",border:"none",background:"transparent",fontSize:12,textAlign:"center",outline:"none",color:"#0f172a",padding:"2px 0"};
+  const sel={width:"100%",border:"none",background:"transparent",fontSize:11,textAlign:"center",outline:"none",color:"#0f172a"};
+  const cSel={border:"1px solid #cbd5e1",borderRadius:6,padding:"4px 6px",fontSize:12,background:"#fff",color:"#0f172a",cursor:"pointer"};
+  const sc=s=>s==="pass"?PASS_GREEN:s==="fail"?FAIL_RED:"#94a3b8";
+  const sl=s=>s==="pass"?"PASS":s==="fail"?"FAIL":"—";
+  const locked=hasExceedance!=="no";
+
+  // ── Report view ─────────────────────────────────────────────────────────────
+  if(view==="report")return h("div",{style:{fontFamily:"'Segoe UI',Arial,sans-serif",minHeight:"100vh",background:"#f1f5f9"}},
+    h("div",{style:{background:"#1e40af",padding:"12px 20px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}},
+      h("button",{onClick:()=>setView("main"),style:{background:"#fff",color:"#1e40af",border:"none",borderRadius:7,padding:"7px 16px",fontWeight:700,fontSize:12,cursor:"pointer"}},"← Back"),
+      h("span",{style:{color:"#fff",fontWeight:700,fontSize:14}},`Report Preview – ${equipmentId||"Equipment"}`),
+      h("div",{style:{marginLeft:"auto",display:"flex",gap:8}},
+        h("button",{onClick:downloadHtml,style:{background:"#fff",color:"#1e40af",border:"none",borderRadius:7,padding:"7px 16px",fontWeight:700,fontSize:12,cursor:"pointer"}},"⬇ Download HTML"),
+        h("button",{onClick:()=>document.getElementById("rframe").contentWindow.print(),style:{background:"#16a34a",color:"#fff",border:"none",borderRadius:7,padding:"7px 18px",fontWeight:700,fontSize:12,cursor:"pointer"}},"🖨 Print / Save PDF")
+      )
+    ),
+    h("div",{style:{padding:16}},
+      h("div",{style:{background:"#fff3cd",border:"1px solid #ffc107",borderRadius:8,padding:"10px 16px",marginBottom:12,fontSize:12,color:"#7d4e00"}},
+        h("strong",null,"To save as PDF:")," Click 'Print / Save PDF' → choose ",h("strong",null,"'Save as PDF'")," as destination → Save. Or Download HTML → open in browser → Ctrl+P → Save as PDF."
+      ),
+      h("iframe",{id:"rframe",srcDoc:reportHtml,style:{width:"100%",height:"calc(100vh - 160px)",border:"none",borderRadius:8,boxShadow:"0 2px 8px rgba(0,0,0,.15)",background:"#fff"},title:"Calibration Report"})
+    )
+  );
+
+  // ── Main view ───────────────────────────────────────────────────────────────
+  return h("div",{style:{fontFamily:"'Segoe UI',Arial,sans-serif",direction:"ltr",background:"#f1f5f9",minHeight:"100vh",paddingBottom:60}},
+
+    // Modal
+    showModal&&h("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}},
+      h("div",{style:{background:"#fff",borderRadius:14,padding:"28px 32px",width:420,boxShadow:"0 20px 60px rgba(0,0,0,.3)"}},
+        h("h3",{style:{margin:"0 0 14px",fontSize:16}},"Generate PDF Report"),
+        h("p",{style:{fontSize:12,color:"#64748b",margin:"0 0 16px",lineHeight:1.6}},"Formatted for ANAB/ILAC auditors. Preview inside the app, then print to PDF."),
+        h("div",{style:{marginBottom:12}},
+          h("label",{style:{fontSize:12,fontWeight:600,color:"#334155",display:"block",marginBottom:4}},"Report Date"),
+          h(DatePicker,{value:reportDate,onChange:setReportDate,placeholder:"DD/MM/YYYY",inputStyle:{width:"100%",border:"1px solid #cbd5e1",borderRadius:6,padding:"7px 10px",fontSize:12,background:"#fff",color:"#0f172a"}})
+        ),
+        [["Prepared By",preparedBy,setPreparedBy,"Name / ID"],["Organization / Laboratory",orgName,setOrgName,"Lab or company name"]].map(([label,val,setter,ph])=>
+          h("div",{key:label,style:{marginBottom:12}},
+            h("label",{style:{fontSize:12,fontWeight:600,color:"#334155",display:"block",marginBottom:4}},label),
+            h("input",{value:val,onChange:e=>setter(e.target.value),placeholder:ph,style:{width:"100%",border:"1px solid #cbd5e1",borderRadius:6,padding:"7px 10px",fontSize:12}})
+          )
+        ),
+        h("div",{style:{display:"flex",gap:10,justifyContent:"flex-end",marginTop:20}},
+          h("button",{onClick:()=>setShowModal(false),style:{padding:"8px 18px",border:"1px solid #cbd5e1",borderRadius:8,background:"#fff",color:"#475569",fontSize:13,cursor:"pointer"}},"Cancel"),
+          h("button",{onClick:generateAndShow,style:{padding:"8px 20px",border:"none",borderRadius:8,background:"#0f172a",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}},"Preview Report →")
+        )
+      )
+    ),
+
+    // Header
+    h("div",{style:{background:"#0f172a",color:"#fff",padding:"16px 28px",display:"flex",alignItems:"center",justifyContent:"space-between"}},
+      h("div",null,
+        h("div",{style:{fontSize:19,fontWeight:700,marginBottom:2}},"Calibration Interval Evaluation"),
+        h("div",{style:{fontSize:11,color:"#94a3b8"}},"ISO/IEC 17025:2017 · ILAC G24 / OIML D10 · JCGM 100 (GUM)")
+      ),
+      h("button",{onClick:()=>!locked&&setShowModal(true),style:{background:locked?"#94a3b8":"#2563eb",color:"#fff",border:"none",borderRadius:8,padding:"9px 18px",fontSize:13,fontWeight:700,cursor:locked?"not-allowed":"pointer",opacity:locked?0.6:1},title:locked?"יש לענות על שאלת החריגות תחילה":""},"📄 Generate PDF Report")
+    ),
+
+    h("div",{style:{maxWidth:1400,margin:"0 auto",padding:"20px 16px"}},
+
+      // ── Exceedance gate ──────────────────────────────────────────────────────
+      h("div",{style:{marginBottom:16,borderRadius:12,border:hasExceedance===null?"2px solid #fbbf24":hasExceedance==="yes"?"2px solid #fca5a5":"2px solid #86efac",background:hasExceedance===null?"#fffbeb":hasExceedance==="yes"?"#fef2f2":"#f0fdf4",padding:"16px 20px"}},
+        h("div",{style:{fontWeight:700,fontSize:13,color:"#0f172a",marginBottom:10}},"שאלת סינון ראשונית – יש לענות לפני מילוי הטופס"),
+        h("div",{style:{fontSize:13,color:"#334155",marginBottom:12}},"האם קיימות חריגות באחת מתעודות הכיול הנבדקות?"),
+        h("div",{style:{display:"flex",gap:10,flexWrap:"wrap"}},
+          h("button",{onClick:()=>setHasExceedance("yes"),style:{padding:"9px 22px",borderRadius:8,border:"2px solid",borderColor:hasExceedance==="yes"?FAIL_RED:"#e2e8f0",background:hasExceedance==="yes"?"#fee2e2":"#fff",color:hasExceedance==="yes"?FAIL_RED:"#475569",fontWeight:700,fontSize:13,cursor:"pointer"}},"כן – קיימת חריגה"),
+          h("button",{onClick:()=>setHasExceedance("no"),style:{padding:"9px 22px",borderRadius:8,border:"2px solid",borderColor:hasExceedance==="no"?PASS_GREEN:"#e2e8f0",background:hasExceedance==="no"?"#dcfce7":"#fff",color:hasExceedance==="no"?PASS_GREEN:"#475569",fontWeight:700,fontSize:13,cursor:"pointer"}},"לא – אין חריגות"),
+          hasExceedance!==null&&h("button",{onClick:()=>setHasExceedance(null),style:{padding:"9px 16px",borderRadius:8,border:"1px solid #e2e8f0",background:"#f8fafc",color:"#94a3b8",fontSize:12,cursor:"pointer"}},"נקה")
+        ),
+        hasExceedance==="yes"&&h("div",{style:{marginTop:14,padding:"14px 18px",background:"#fff",border:"1px solid #fca5a5",borderRadius:10}},
+          h("div",{style:{fontSize:15,fontWeight:800,color:FAIL_RED,marginBottom:6}},"✗ הטופס נעול – לא ניתן להאריך תוקף כיול"),
+          h("div",{style:{fontSize:12,color:"#7f1d1d",lineHeight:1.7}},"קיומן של חריגות בתעודות הכיול מהוות בסיס לאי-התאמה בהתאם ל-ISO/IEC 17025:2017 ו-ILAC G24.",h("br"),"יש לטפל בחריגות, לבצע כיול חדש, ולוודא שכל התעודות תקינות לפני שניתן לשקול הארכת מרווח כיול.")
+        ),
+        hasExceedance===null&&h("div",{style:{marginTop:10,fontSize:11,color:"#92400e"}},"⚠ יש לענות על שאלה זו כדי להמשיך למילוי הטופס")
+      ),
+
+      // ── Rest of form (locked when exceedance not "no") ───────────────────────
+      h("div",{style:{opacity:locked?0.3:1,pointerEvents:locked?"none":"auto"}},
+
+        // Equipment controls
+        h("div",{style:{display:"flex",alignItems:"center",gap:20,marginBottom:14,flexWrap:"wrap"}},
+          h("div",{style:{display:"flex",alignItems:"center",gap:8}},
+            h("span",{style:{fontSize:12,fontWeight:700,color:RED}},"Equipment ID"),
+            h("input",{value:equipmentId,onChange:e=>setEquipmentId(e.target.value),style:{border:"1.5px solid #fca5a5",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:600,width:160,background:INPUT_BG},placeholder:"e.g. 6502394"})
+          ),
+          h("div",{style:{display:"flex",alignItems:"center",gap:8}},
+            h("span",{style:{fontSize:12,fontWeight:600,color:"#475569"}},"Equipment type:"),
+            h("select",{value:equipmentType,onChange:e=>setEquipmentType(e.target.value),style:{...cSel}},
+              h("option",{value:"fixed"},"ציוד נייח"),h("option",{value:"mobile"},"ציוד נייד")
+            )
+          ),
+          h("div",{style:{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}},
+            h("span",{style:{fontSize:11,color:"#94a3b8"}},`${sharedRows.length-1} year${sharedRows.length-1!==1?"s":""} compared`),
+            h("button",{onClick:addSharedRow,disabled:sharedRows.length>=6,style:{background:sharedRows.length>=6?"#e2e8f0":"#1e40af",color:sharedRows.length>=6?"#94a3b8":"#fff",border:"none",borderRadius:6,padding:"6px 14px",fontSize:12,cursor:sharedRows.length>=6?"default":"pointer",fontWeight:600}},"+ Add Year")
+          )
+        ),
+
+        // Legend
+        h("div",{style:{display:"flex",gap:18,marginBottom:12,fontSize:11,color:"#64748b",flexWrap:"wrap"}},
+          h("span",{style:{display:"flex",alignItems:"center",gap:4}},h("span",{style:{width:12,height:12,background:REF_BG,border:`1px solid ${REF_BORDER}`,display:"inline-block",borderRadius:2}}),"REF – Reference year"),
+          h("span",{style:{display:"flex",alignItems:"center",gap:4}},h("span",{style:{width:12,height:12,background:INPUT_BG,border:"1px solid #fca5a5",display:"inline-block",borderRadius:2}}),h("span",{style:{color:RED,fontWeight:700}},"Red")," – User input"),
+          h("span",{style:{display:"flex",alignItems:"center",gap:4}},h("span",{style:{width:12,height:12,background:AUTO_BG,border:"1px solid #e2e8f0",display:"inline-block",borderRadius:2}}),"Auto-calculated")
+        ),
+
+        // Global verdict
+        hasAnyDecision&&h("div",{style:{marginBottom:16,borderRadius:10,padding:"12px 20px",background:globalAllPass?"#f0fdf4":"#fef2f2",border:`2px solid ${globalAllPass?"#86efac":"#fca5a5"}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}},
+          h("div",null,
+            h("div",{style:{fontSize:15,fontWeight:800,color:globalAllPass?PASS_GREEN:FAIL_RED}},globalAllPass?"✓ Extension approved – all ranges PASS":"✗ Extension not approved"),
+            h("div",{style:{fontSize:11,color:"#475569",marginTop:2}},"All ranges and all years must return PASS.")
+          ),
+          h("div",{style:{display:"flex",gap:8,flexWrap:"wrap"}},
+            ranges.map((rng,ri)=>h("div",{key:rng.id,onClick:()=>setActiveRange(ri),style:{padding:"4px 12px",borderRadius:20,fontSize:12,fontWeight:700,cursor:"pointer",background:rangePassStatus[ri]==="pass"?"#dcfce7":rangePassStatus[ri]==="fail"?"#fee2e2":"#f1f5f9",color:sc(rangePassStatus[ri]),border:`1px solid ${rangePassStatus[ri]==="pass"?"#86efac":rangePassStatus[ri]==="fail"?"#fca5a5":"#e2e8f0"}`}},`${rng.label} [${unitLabel(rng)}]: ${sl(rangePassStatus[ri])}`))
+          )
+        ),
+
+        // Range tabs
+        h("div",{style:{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}},
+          ranges.map((rng,ri)=>h("div",{key:rng.id,onClick:()=>setActiveRange(ri),style:{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:"8px 8px 0 0",cursor:"pointer",fontSize:13,fontWeight:600,background:ri===activeRange?"#fff":"#e2e8f0",color:ri===activeRange?"#0f172a":"#64748b",border:ri===activeRange?"1px solid #cbd5e1":"1px solid transparent",borderBottom:ri===activeRange?"1px solid #fff":"1px solid #cbd5e1",marginBottom:ri===activeRange?-1:0,zIndex:ri===activeRange?2:1}},
+            h("span",{style:{width:8,height:8,borderRadius:"50%",background:sc(rangePassStatus[ri]),display:"inline-block"}}),
+            h("input",{value:rng.label,onChange:e=>{e.stopPropagation();updateRangeLabel(ri,e.target.value)},onClick:e=>e.stopPropagation(),style:{border:"none",background:"transparent",fontSize:13,fontWeight:600,color:"inherit",outline:"none",width:80,cursor:"text"}}),
+            h("span",{style:{fontSize:11,color:"#94a3b8",fontWeight:400}},`[${unitLabel(rng)}]`),
+            ranges.length>1&&h("span",{onClick:e=>{e.stopPropagation();removeRange(ri)},style:{color:"#94a3b8",fontSize:12,cursor:"pointer"}},"✕")
+          )),
+          h("button",{onClick:addRange,style:{padding:"7px 14px",borderRadius:"8px 8px 0 0",border:"1px dashed #cbd5e1",background:"transparent",color:"#64748b",fontSize:12,cursor:"pointer",fontWeight:600}},"+ Add Range")
+        ),
+
+        // Per-range unit controls
+        h("div",{style:{background:"#fff",border:"1px solid #cbd5e1",borderTop:"none",borderRadius:"0 8px 0 0",padding:"10px 14px",display:"flex",flexDirection:"column",gap:0}},
+          // Measured Value row
+          h("div",{style:{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",borderBottom:"1px solid #f1f5f9",paddingBottom:8,marginBottom:8}},
+            h("span",{style:{fontSize:11,fontWeight:700,color:"#1e40af",minWidth:110}},"Measured Value:"),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},h("span",{style:{fontSize:11,color:"#475569"}},"Quantity:"),h("select",{value:range.quantity,onChange:e=>updateRange(activeRange,"quantity",e.target.value),style:{...cSel,minWidth:150}},QUANTITIES.map(q=>h("option",{key:q.sym,value:q.sym},q.label)))),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},h("span",{style:{fontSize:11,color:"#475569"}},"Prefix:"),h("select",{value:range.prefix,onChange:e=>updateRange(activeRange,"prefix",e.target.value),style:{...cSel,minWidth:120}},PREFIXES.map(p=>h("option",{key:p.sym,value:p.sym},p.label)))),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},h("span",{style:{fontSize:11,color:"#475569"}},"Decimals:"),h("select",{value:range.decimals,onChange:e=>updateRange(activeRange,"decimals",parseInt(e.target.value)),style:{...cSel,minWidth:60}},[0,1,2,3,4,5,6].map(d=>h("option",{key:d,value:d},d)))),
+            h("span",{style:{fontSize:11,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:5,padding:"2px 10px",color:"#1e40af",fontWeight:700}},`${range.prefix}${range.quantity} · 0.${"0".repeat(range.decimals)}`)
+          ),
+          // Tolerance row
+          h("div",{style:{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",borderBottom:"1px solid #f1f5f9",paddingBottom:8,marginBottom:8}},
+            h("span",{style:{fontSize:11,fontWeight:700,color:"#7c3aed",minWidth:110}},"Tolerance:"),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},h("span",{style:{fontSize:11,color:"#475569"}},"Prefix:"),h("select",{value:range.tolPrefix,onChange:e=>updateRange(activeRange,"tolPrefix",e.target.value),style:{...cSel,minWidth:120}},PREFIXES.map(p=>h("option",{key:p.sym,value:p.sym},p.label)))),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},h("span",{style:{fontSize:11,color:"#475569"}},"Decimals:"),h("select",{value:range.tolDecimals,onChange:e=>updateRange(activeRange,"tolDecimals",parseInt(e.target.value)),style:{...cSel,minWidth:60}},[0,1,2,3,4,5,6].map(d=>h("option",{key:d,value:d},d)))),
+            h("span",{style:{fontSize:11,background:"#faf5ff",border:"1px solid #e9d5ff",borderRadius:5,padding:"2px 10px",color:"#7c3aed",fontWeight:700}},`${range.tolPrefix}${range.quantity} · 0.${"0".repeat(range.tolDecimals)}`)
+          ),
+          // Uncertainty row
+          h("div",{style:{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}},
+            h("span",{style:{fontSize:11,fontWeight:700,color:"#b45309",minWidth:110}},"Uncertainty:"),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},h("span",{style:{fontSize:11,color:"#475569"}},"Prefix:"),h("select",{value:range.uncPrefix,onChange:e=>updateRange(activeRange,"uncPrefix",e.target.value),style:{...cSel,minWidth:120}},PREFIXES.map(p=>h("option",{key:p.sym,value:p.sym},p.label)))),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},h("span",{style:{fontSize:11,color:"#475569"}},"Decimals:"),h("select",{value:range.uncDecimals,onChange:e=>updateRange(activeRange,"uncDecimals",parseInt(e.target.value)),style:{...cSel,minWidth:60}},[0,1,2,3,4,5,6].map(d=>h("option",{key:d,value:d},d)))),
+            h("span",{style:{fontSize:11,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:5,padding:"2px 10px",color:"#b45309",fontWeight:700}},`${range.uncPrefix}${range.quantity} · 0.${"0".repeat(range.uncDecimals)}`)
+          )
+        ),
+
+        // Table
+        h("div",{style:{overflowX:"auto",background:"#fff",border:"1px solid #cbd5e1",borderTop:"none",borderRadius:"0 0 8px 8px",boxShadow:"0 1px 4px rgba(0,0,0,.08)"}},
+          h("table",{style:{borderCollapse:"collapse",width:"100%",minWidth:1100}},
+            h("thead",null,
+              h("tr",null,
+                h("th",{style:thB(),rowSpan:2},"#"),
+                h("th",{style:thB(true),rowSpan:2},"Calibration",h("br"),"Date"),
+                h("th",{style:thB(true),rowSpan:2},"Measured Value",h("br"),h("span",{style:{fontWeight:400,color:"#94a3b8",fontSize:10}},[`[${unit}]`])),
+                h("th",{style:{...thB(),color:"#94a3b8"},rowSpan:2},"Previous Value",h("br"),h("span",{style:{fontWeight:400,fontSize:10}},[`[${unit}]`])),
+                h("th",{style:thB(true),rowSpan:2},"Time",h("br"),"Interval"),
+                h("th",{style:thB(true),rowSpan:2},"ADJUSTMENT",h("br"),"(0,1)"),
+                h("th",{style:thB(),rowSpan:2},"Drift",h("br"),h("span",{style:{fontWeight:400,fontSize:10}},[`[${unit}]`])),
+                h("th",{style:thB(),rowSpan:2},"Drift per",h("br"),"Year"),
+                h("th",{style:thB(true),rowSpan:2},"Tolerance",h("br"),h("span",{style:{fontWeight:400,color:"#d8b4fe",fontSize:10}},[`[${range.tolPrefix}${range.quantity}]`])),
+                h("th",{style:thB(true),rowSpan:2},"Uncertainty",h("br"),h("span",{style:{fontWeight:400,color:"#fcd34d",fontSize:10}},[`[${range.uncPrefix}${range.quantity}]`])),
+                h("th",{style:thB(),rowSpan:2},"TUR"),
+                h("th",{style:thB(true),colSpan:2},"Duration | Frequency"),
+                h("th",{style:thB(true),rowSpan:2},"Environment",h("br"),"(1-5)"),
+                h("th",{style:thB(),rowSpan:2},"Usage",h("br"),"score(1-5)"),
+                h("th",{style:thB(),rowSpan:2},"Risk",h("br"),"score(1-5)"),
+                h("th",{style:thB(),rowSpan:2},"Drift<",h("br"),"Uncertainty"),
+                h("th",{style:thB(),rowSpan:2},"Decision"),
+                h("th",{style:thB(true),rowSpan:2},"Cert.NO"),
+                h("th",{style:thB(),rowSpan:2})
+              ),
+              h("tr",null,
+                h("th",{style:{...thB(true),fontSize:10}},"זמן עבודה"),
+                h("th",{style:{...thB(true),fontSize:10}},"תדירות שימוש")
+              )
+            ),
+            h("tbody",null,
+              sharedRows.map((shared,i)=>{
+                const isRef=i===0,rrow=range.rows[i],calc=calculated[i];
+                const prevVal=i>0&&range.rows[i-1].measuredValue!==""?Number(range.rows[i-1].measuredValue).toFixed(dec):"";
+                const decCol=calc.decision==="PASS"?PASS_GREEN:calc.decision==="FAIL"?FAIL_RED:"#94a3b8";
+                const dltCol=calc.driftLtUnc==="YES"?PASS_GREEN:calc.driftLtUnc==="NO"?FAIL_RED:"#94a3b8";
+                const turCol=calc.tur!==null?(calc.tur>=3?PASS_GREEN:FAIL_RED):"#94a3b8";
+                const driftCol=calc.drift!==null&&parseFloat(rrow.uncertainty)?(Math.abs(calc.drift)>parseFloat(rrow.uncertainty)?FAIL_RED:"#334155"):"#334155";
+                const measDisplay=rrow.measuredValue!==""&&!isNaN(parseFloat(rrow.measuredValue))?Number(rrow.measuredValue).toFixed(dec):rrow.measuredValue;
+                const rowBg=isRef?"#fffdf0":i%2===0?"#fff":"#f8fafc";
+                return h("tr",{key:shared.id,style:{background:rowBg}},
+                  h("td",{style:{...tdA,background:isRef?"#fef9c3":AUTO_BG,fontWeight:700,color:isRef?"#92400e":"#475569",fontSize:11}},isRef?"REF":i),
+                  // Date
+                  h("td",{style:isRef?tdR:tdI},h(DatePicker,{value:shared.calibrationDate,onChange:val=>updateShared(i,"calibrationDate",val),placeholder:isRef?"Base date":"DD/MM/YYYY",inputStyle:{...inp,width:"100%",cursor:"pointer",minWidth:100}})),
+                  // Measured Value
+                  h("td",{style:isRef?tdR:tdI},
+                    h("div",{style:{display:"flex",alignItems:"center"}},
+                      h("input",{style:{...inp,flex:1},type:"number",step:"any",value:rrow.measuredValue,onChange:e=>updateRangeRow(activeRange,i,"measuredValue",e.target.value),placeholder:`0.${"0".repeat(dec)}`}),
+                      h("span",{style:{fontSize:10,color:"#94a3b8",whiteSpace:"nowrap",paddingRight:2}},unit)
+                    ),
+                    rrow.measuredValue!==""&&!isNaN(parseFloat(rrow.measuredValue))&&h("div",{style:{fontSize:10,color:"#1e40af",textAlign:"right",paddingRight:2,fontWeight:600}},`${Number(rrow.measuredValue).toFixed(dec)} ${unit}`)
+                  ),
+                  // Previous Value auto
+                  h("td",{style:{...tdA,color:"#1e40af",fontStyle:"italic",fontSize:11}},isRef?"—":prevVal!==""?`${prevVal} ${unit}`:"—"),
+                  // Time Interval
+                  h("td",{style:isRef?{...tdA,background:"#fef9c3",color:"#94a3b8"}:tdI},isRef?"—":h("input",{style:inp,type:"number",step:"0.01",value:rrow.timeInterval,onChange:e=>updateRangeRow(activeRange,i,"timeInterval",e.target.value)})),
+                  // Adjustment
+                  h("td",{style:isRef?{...tdA,background:"#fef9c3",color:"#94a3b8"}:tdI},isRef?"—":h("select",{style:sel,value:rrow.adjustment,onChange:e=>updateRangeRow(activeRange,i,"adjustment",e.target.value)},h("option",{value:"0"},"0"),h("option",{value:"1"},"1"))),
+                  // Drift
+                  h("td",{style:{...tdA,color:driftCol}},isRef?"—":calc.drift!==null?fmt(calc.drift,dec):"—"),
+                  // Drift per Year
+                  h("td",{style:tdA},isRef?"—":calc.driftPerYear!==null?fmt(calc.driftPerYear,dec):"—"),
+                  // Tolerance
+                  h("td",{style:isRef?{...tdA,background:"#fef9c3",color:"#94a3b8"}:tdI},isRef?"—":
+                    h("div",null,
+                      h("div",{style:{display:"flex",alignItems:"center"}},
+                        h("input",{style:{...inp,flex:1},type:"number",step:"any",value:rrow.tolerance,onChange:e=>updateRangeRow(activeRange,i,"tolerance",e.target.value),placeholder:`0.${"0".repeat(range.tolDecimals)}`}),
+                        h("span",{style:{fontSize:9,color:"#7c3aed",whiteSpace:"nowrap",paddingRight:2,fontWeight:700}},`${range.tolPrefix}${range.quantity}`)
+                      ),
+                      rrow.tolerance!==""&&!isNaN(parseFloat(rrow.tolerance))&&h("div",{style:{fontSize:10,color:"#7c3aed",textAlign:"right",paddingRight:2,fontWeight:600}},`${Number(rrow.tolerance).toFixed(range.tolDecimals)} ${range.tolPrefix}${range.quantity}`)
+                    )
+                  ),
+                  // Uncertainty
+                  h("td",{style:isRef?{...tdA,background:"#fef9c3",color:"#94a3b8"}:tdI},isRef?"—":
+                    h("div",null,
+                      h("div",{style:{display:"flex",alignItems:"center"}},
+                        h("input",{style:{...inp,flex:1},type:"number",step:"any",value:rrow.uncertainty,onChange:e=>updateRangeRow(activeRange,i,"uncertainty",e.target.value),placeholder:`0.${"0".repeat(range.uncDecimals)}`}),
+                        h("span",{style:{fontSize:9,color:"#b45309",whiteSpace:"nowrap",paddingRight:2,fontWeight:700}},`${range.uncPrefix}${range.quantity}`)
+                      ),
+                      rrow.uncertainty!==""&&!isNaN(parseFloat(rrow.uncertainty))&&h("div",{style:{fontSize:10,color:"#b45309",textAlign:"right",paddingRight:2,fontWeight:600}},`${Number(rrow.uncertainty).toFixed(range.uncDecimals)} ${range.uncPrefix}${range.quantity}`)
+                    )
+                  ),
+                  // TUR
+                  h("td",{style:{...tdA,color:isRef?"#94a3b8":turCol,fontWeight:isRef?400:700}},isRef?"—":fmt(calc.tur,2)),
+                  // Duration
+                  h("td",{style:isRef?{...tdA,background:"#fef9c3",color:"#94a3b8"}:tdI},isRef?"—":h("select",{style:sel,value:rrow.duration,onChange:e=>updateRangeRow(activeRange,i,"duration",e.target.value)},DURATION_OPTS.map(o=>h("option",{key:o.v,value:o.v},o.label)))),
+                  // Frequency
+                  h("td",{style:isRef?{...tdA,background:"#fef9c3",color:"#94a3b8"}:tdI},isRef?"—":h("select",{style:sel,value:rrow.frequency,onChange:e=>updateRangeRow(activeRange,i,"frequency",e.target.value)},FREQ_OPTS.map(o=>h("option",{key:o.v,value:o.v},o.label)))),
+                  // Environment
+                  h("td",{style:isRef?{...tdA,background:"#fef9c3",color:"#94a3b8"}:tdI},isRef?"—":h("select",{style:sel,value:rrow.environment,onChange:e=>updateRangeRow(activeRange,i,"environment",e.target.value)},envOpts.map(o=>h("option",{key:o.v,value:o.v},o.label)))),
+                  // Usage score
+                  h("td",{style:{...tdA,color:isRef?"#94a3b8":calc.usageScore>2?FAIL_RED:PASS_GREEN,fontWeight:isRef?400:600}},isRef?"—":calc.usageScore),
+                  // Risk score
+                  h("td",{style:{...tdA,color:isRef?"#94a3b8":calc.riskScore>2?FAIL_RED:PASS_GREEN,fontWeight:isRef?400:600}},isRef?"—":calc.riskScore),
+                  // Drift < Uncertainty
+                  h("td",{style:{...tdA,color:isRef?"#94a3b8":dltCol,fontWeight:isRef?400:700}},isRef?"—":calc.driftLtUnc||"—"),
+                  // Decision
+                  h("td",{style:{...tdA,color:isRef?"#94a3b8":decCol,fontWeight:800,fontSize:13}},isRef?"—":calc.decision||"—"),
+                  // Cert.NO
+                  h("td",{style:isRef?tdR:tdI},h("input",{style:{...inp,minWidth:80},value:shared.certNo,onChange:e=>updateShared(i,"certNo",e.target.value),placeholder:"Cert #"})),
+                  // Remove
+                  h("td",{style:{...tdA,padding:"4px"}},!isRef&&sharedRows.length>2&&h("button",{onClick:()=>removeSharedRow(i),style:{background:"transparent",border:"none",color:"#94a3b8",cursor:"pointer",fontSize:14}},"✕"))
+                )
+              })
+            )
+          )
+        ),
+
+        // Bottom verdict
+        hasAnyDecision&&h("div",{style:{marginTop:16,borderRadius:10,padding:"14px 18px",background:globalAllPass?"#f0fdf4":"#fef2f2",border:`2px solid ${globalAllPass?"#86efac":"#fca5a5"}`}},
+          h("div",{style:{fontSize:15,fontWeight:800,color:globalAllPass?PASS_GREEN:FAIL_RED,marginBottom:8}},globalAllPass?"✓ Extension approved – Calibration interval may be extended by one additional year":"✗ Extension not approved – Calibration required at standard interval"),
+          h("div",{style:{display:"flex",flexWrap:"wrap",gap:8}},
+            ranges.map((rng,ri)=>h("div",{key:rng.id,onClick:()=>setActiveRange(ri),style:{padding:"4px 12px",borderRadius:20,fontSize:12,fontWeight:700,cursor:"pointer",background:rangePassStatus[ri]==="pass"?"#dcfce7":rangePassStatus[ri]==="fail"?"#fee2e2":"#f1f5f9",color:sc(rangePassStatus[ri]),border:`1px solid ${rangePassStatus[ri]==="pass"?"#86efac":rangePassStatus[ri]==="fail"?"#fca5a5":"#e2e8f0"}`}},`${rng.label} [${unitLabel(rng)}]: ${sl(rangePassStatus[ri])}`))
+          )
+        ),
+
+        // Reference tables
+        h("div",{style:{marginTop:18,display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}},
+          h("div",{style:{background:"#fff",border:"1px solid #e2e8f0",borderRadius:10,padding:"14px 16px"}},
+            h("div",{style:{fontWeight:700,fontSize:12,color:"#0f172a",marginBottom:10,borderBottom:"1px solid #e2e8f0",paddingBottom:6}},"Formulas"),
+            [["Drift","Measured Value − Previous Value"],["Drift per Year","Drift ÷ Time Interval"],["TUR","Tolerance ÷ Uncertainty"],["Usage score (1-5)","(Duration + Frequency) ÷ 2  [rounded]"],["Risk score (1-5)","(Usage score + Environment) ÷ 2  [rounded]"]].map(([k,v])=>
+              h("div",{key:k,style:{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid #f8fafc",fontSize:11}},
+                h("span",{style:{fontWeight:600,color:"#334155"}},k),h("span",{style:{color:"#64748b",fontFamily:"monospace"}},v)
+              )
+            )
+          ),
+          h("div",{style:{background:"#fff",border:"1px solid #e2e8f0",borderRadius:10,padding:"14px 16px"}},
+            h("div",{style:{fontWeight:700,fontSize:12,color:"#0f172a",marginBottom:10,borderBottom:"1px solid #e2e8f0",paddingBottom:6}},"Decision rule: FAIL if ANY condition"),
+            ["ADJUSTMENT = 1","TUR < 3","Drift > Uncertainty","Environment > 2","Usage score > 2","Risk score > 2"].map(c=>
+              h("div",{key:c,style:{display:"flex",alignItems:"center",gap:6,padding:"4px 0",borderBottom:"1px solid #f8fafc",fontSize:11}},
+                h("span",{style:{color:FAIL_RED,fontWeight:700}},"✗"),h("span",{style:{fontFamily:"monospace",color:"#334155"}},c)
+              )
+            )
+          )
+        ),
+        h("div",{style:{marginTop:12,display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}},
+          [{title:"Duration (זמן עבודה)",rows:[[1,"דקות בודדות"],[2,"עד שעה"],[3,"כמה שעות"],[4,"רוב היום"],[5,"עבודה רציפה"]]},{title:"Frequency (תדירות שימוש)",rows:[[1,"שבועי"],[2,"כמה פעמים בשבוע"],[3,"יומי"],[4,"רוב היום"],[5,"עבודה רציפה"]]},{title:"Environment – נייח",rows:[[1,"מעבדה מבוקרת"],[2,"שימוש רגיל"],[3,"תנאים משתנים"],[4,"שטח"],[5,"שטח/עומס קיצוני"]]},{title:"Environment – נייד",rows:[[2,"מעבדה מבוקרת"],[3,"שימוש רגיל"],[4,"תנאים משתנים"],[5,"שטח/עומס קיצוני"]]}].map(tbl=>
+            h("div",{key:tbl.title,style:{background:"#fff",border:"1px solid #e2e8f0",borderRadius:8,padding:"12px 14px"}},
+              h("div",{style:{fontWeight:700,fontSize:11,color:"#0f172a",marginBottom:8}},tbl.title),
+              tbl.rows.map(([score,desc])=>h("div",{key:score,style:{display:"flex",gap:8,padding:"3px 0",borderBottom:"1px solid #f8fafc",fontSize:11}},h("span",{style:{fontWeight:700,minWidth:16,color:score<=2?PASS_GREEN:score===3?"#d97706":FAIL_RED}},score),h("span",{style:{color:"#475569"}},desc)))
+            )
+          )
+        ),
+        h("div",{style:{marginTop:12,background:"#fff",border:"1px solid #e2e8f0",borderRadius:10,padding:"12px 16px",fontSize:11,color:"#64748b"}},
+          h("strong",{style:{color:"#0f172a"}},"Methodological Basis · "),
+          "ISO/IEC 17025:2017 (Clauses 6.4.7, 7.6, 7.7, 7.8.6) · ILAC G24 / OIML D10 · JCGM 100 (GUM)",
+          h("span",{style:{color:"#94a3b8",fontStyle:"italic"}}," · 'Usage score' and 'risk index' are internal engineering tools not explicitly defined in the above standards.")
+        )
+      ) // end locked wrapper
+    )
+  );
+}
+
+const root=ReactDOM.createRoot(document.getElementById('root'));
+root.render(React.createElement(App));
+</script>
+</body>
+</html>
