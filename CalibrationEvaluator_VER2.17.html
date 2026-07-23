@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Calibration Interval Evaluation</title>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',Arial,sans-serif;background:#f1f5f9}
+select,button,input{font-family:inherit}
+input[type=number]::-webkit-inner-spin-button{opacity:.4}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const {createElement:h,useState,useRef,useEffect}=React;
+
+const RED="#dc2626",PASS_GREEN="#16a34a",FAIL_RED="#dc2626";
+const AUTO_BG="#f8fafc",INPUT_BG="#fff8f8",REF_BG="#fffbeb",REF_BORDER="#fde68a";
+
+const QUANTITIES=[
+  {sym:"V",label:"Voltage (V)"},{sym:"A",label:"Current (A)"},{sym:"\u03a9",label:"Resistance (\u03a9)"},
+  {sym:"g",label:"Mass (g)"},{sym:"N",label:"Force (N)"},{sym:"kgf",label:"Force (kgf)"},
+  {sym:"Pa",label:"Pressure (Pa)"},{sym:"bar",label:"Pressure (bar)"},
+  {sym:"\u00b0C",label:"Temperature (\u00b0C)"},{sym:"K",label:"Temperature (K)"},
+  {sym:"Hz",label:"Frequency (Hz)"},{sym:"s",label:"Time (s)"},{sym:"m",label:"Length (m)"},
+  {sym:"L",label:"Volume (L)"},{sym:"W",label:"Power (W)"},{sym:"lx",label:"Illuminance (lx)"},
+  {sym:"dB",label:"Level (dB)"},{sym:"pH",label:"pH"},{sym:"%RH",label:"Humidity (%RH)"},
+  {sym:"rpm",label:"Speed (rpm)"},{sym:"cd",label:"Luminous int. (cd)"},{sym:"mol",label:"Amount (mol)"}
+];
+const PREFIXES=[
+  {sym:"G",label:"Giga (G)"},{sym:"M",label:"Mega (M)"},{sym:"k",label:"Kilo (k)"},
+  {sym:"",label:"\u2014 (none)"},{sym:"m",label:"Milli (m)"},{sym:"\u03bc",label:"Micro (\u03bc)"},
+  {sym:"n",label:"Nano (n)"},{sym:"p",label:"Pico (p)"}
+];
+const DUR_OPTS=[{v:1,label:"1 \u2013 \u05d3\u05e7\u05d5\u05ea \u05d1\u05d5\u05d3\u05d3\u05d5\u05ea"},{v:2,label:"2 \u2013 \u05e2\u05d3 \u05e9\u05e2\u05d4"},{v:3,label:"3 \u2013 \u05db\u05de\u05d4 \u05e9\u05e2\u05d5\u05ea"},{v:4,label:"4 \u2013 \u05e8\u05d5\u05d1 \u05d4\u05d9\u05d5\u05dd"},{v:5,label:"5 \u2013 \u05e2\u05d1\u05d5\u05d3\u05d4 \u05e8\u05e6\u05d9\u05e4\u05d4"}];
+const FRQ_OPTS=[{v:1,label:"1 \u2013 \u05e9\u05d1\u05d5\u05e2\u05d9"},{v:2,label:"2 \u2013 \u05db\u05de\u05d4 \u05e4\u05e2\u05de\u05d9\u05dd/\u05e9\u05d1\u05d5\u05e2"},{v:3,label:"3 \u2013 \u05d9\u05d5\u05de\u05d9"},{v:4,label:"4 \u2013 \u05e8\u05d5\u05d1 \u05d4\u05d9\u05d5\u05dd"},{v:5,label:"5 \u2013 \u05e2\u05d1\u05d5\u05d3\u05d4 \u05e8\u05e6\u05d9\u05e4\u05d4"}];
+const ENV_FIX=[{v:1,label:"1 \u2013 \u05de\u05e2\u05d1\u05d3\u05d4 \u05de\u05d1\u05d5\u05e7\u05e8\u05ea"},{v:2,label:"2 \u2013 \u05e9\u05d9\u05de\u05d5\u05e9 \u05e8\u05d2\u05d9\u05dc"},{v:3,label:"3 \u2013 \u05ea\u05e0\u05d0\u05d9\u05dd \u05de\u05e9\u05ea\u05e0\u05d9\u05dd"},{v:4,label:"4 \u2013 \u05e9\u05d8\u05d7"},{v:5,label:"5 \u2013 \u05e9\u05d8\u05d7/\u05e2\u05d5\u05de\u05e1 \u05e7\u05d9\u05e6\u05d5\u05e0\u05d9"}];
+const ENV_MOB=[{v:2,label:"2 \u2013 \u05de\u05e2\u05d1\u05d3\u05d4 \u05de\u05d1\u05d5\u05e7\u05e8\u05ea"},{v:3,label:"3 \u2013 \u05e9\u05d9\u05de\u05d5\u05e9 \u05e8\u05d2\u05d9\u05dc"},{v:4,label:"4 \u2013 \u05ea\u05e0\u05d0\u05d9\u05dd \u05de\u05e9\u05ea\u05e0\u05d9\u05dd"},{v:5,label:"5 \u2013 \u05e9\u05d8\u05d7/\u05e2\u05d5\u05de\u05e1 \u05e7\u05d9\u05e6\u05d5\u05e0\u05d9"}];
+const MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
+const WDAYS=["Su","Mo","Tu","We","Th","Fr","Sa"];
+
+function rnd(v,d=0){return Math.round(v*Math.pow(10,d))/Math.pow(10,d)}
+function fmt(v,d=4){if(v===null||v===undefined||isNaN(v))return"\u2014";return Number(v).toFixed(d)}
+function unitOf(range){return (range.prefix||"")+(range.quantity||"V")}
+function parseDMY(s){if(!s)return null;const p=s.split("/");if(p.length!==3)return null;const d=+p[0],mo=+p[1]-1,y=+p[2];if(isNaN(d)||isNaN(mo)||isNaN(y))return null;return new Date(y,mo,d)}
+function fmtDMY(dt){if(!dt)return"";return String(dt.getDate()).padStart(2,"0")+"/"+String(dt.getMonth()+1).padStart(2,"0")+"/"+dt.getFullYear()}
+const uid=()=>Math.random().toString(36).slice(2);
+
+function calcRow(row,shared,prevMeasured,isRef){
+  // VER 2.16: timeInterval/duration/frequency/environment come from the SHARED row
+  // (identical across ranges for the same certificate year). adjustment stays per-range.
+  const m=parseFloat(row.measuredValue),p=prevMeasured,ti=parseFloat(shared.timeInterval);
+  const tol=parseFloat(row.tolerance),unc=parseFloat(row.uncertainty);
+  const nom=parseFloat(row.nominalValue);
+  // Exceedance check: |Measured - Nominal| + Uncertainty < Tolerance (applies to REF too)
+  const exceedOk=(!isNaN(m)&&!isNaN(nom)&&!isNaN(unc)&&!isNaN(tol))
+    ?((Math.abs(m-nom)+unc)<tol)
+    :null;
+  // Drift only for non-REF rows (needs a Previous value)
+  const drift=(!isRef&&!isNaN(m)&&p!==undefined&&!isNaN(p))?m-p:null;
+  const driftPerYear=(drift!==null&&!isNaN(ti)&&ti!==0)?drift/ti:null;
+  // TUR needs Tolerance + Uncertainty
+  const tur=(!isNaN(tol)&&!isNaN(unc)&&unc!==0)?tol/unc:null;
+  // Decision requires ALL environment fields to be filled (same for REF and others)
+  if(row.adjustment===""||shared.duration===""||shared.frequency===""||shared.environment===""){
+    return{isRef,drift,driftPerYear,tur,usageScore:null,riskScore:null,exceedOk,decision:null,failReasons:[],env:null};
+  }
+  const adj=parseInt(row.adjustment),dur=parseInt(shared.duration),freq=parseInt(shared.frequency),env=parseInt(shared.environment);
+  const usageScore=rnd((dur+freq)/2,0);
+  const riskScore=rnd((usageScore+env)/2,0);
+  const fail=[];
+  let decision=null;
+  // For decision we need TUR (tolerance+uncertainty). Drift is NOT required (REF has none).
+  if(tur!==null){
+    if(adj!==0)fail.push("Adjustment performed (ADJUSTMENT=1)");
+    if(tur<3)fail.push("TUR="+fmt(tur,2)+" < 3");
+    if(env>2)fail.push("Environment="+env+" > 2");
+    if(usageScore>2)fail.push("Usage score="+usageScore+" > 2");
+    if(riskScore>2)fail.push("Risk score="+riskScore+" > 2");
+    decision=fail.length===0?"PASS":"FAIL";
+  }
+  return{isRef,drift,driftPerYear,tur,usageScore,riskScore,exceedOk,decision,failReasons:fail,env};
+}
+
+const newSharedRow=()=>({id:uid(),calibrationDate:"",certNo:"",timeInterval:"",duration:"",frequency:"",environment:""});
+const newRangeRow=()=>({id:uid(),nominalValue:"",measuredValue:"",adjustment:"0",tolerance:"",uncertainty:""});
+const newRange=(label,sr)=>({id:uid(),label,quantity:"V",prefix:"",decimals:4,tolPrefix:"",tolDecimals:4,uncPrefix:"",uncDecimals:4,rows:sr.map(()=>newRangeRow())});
+
+// ── DatePicker ────────────────────────────────────────────────────────────────
+function DatePicker({value,onChange,placeholder,inputStyle}){
+  const[open,setOpen]=useState(false);
+  const[pos,setPos]=useState({top:0,left:0});
+  const[vy,setVy]=useState(new Date().getFullYear());
+  const[vm,setVm]=useState(new Date().getMonth());
+  const ref=useRef(null);
+  const inpRef=useRef(null);
+  const parsed=parseDMY(value);
+  const today=new Date();
+
+  useEffect(()=>{
+    const fn=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false)};
+    document.addEventListener("mousedown",fn);
+    return()=>document.removeEventListener("mousedown",fn);
+  },[]);
+
+  function openCal(){
+    if(inpRef.current){
+      const r=inpRef.current.getBoundingClientRect();
+      const top=window.innerHeight-r.bottom>260?r.bottom+2:r.top-264;
+      setPos({top,left:Math.min(r.left,window.innerWidth-234)});
+    }
+    setOpen(o=>!o);
+  }
+
+  const dim=(y,m)=>new Date(y,m+1,0).getDate();
+  const fd=(y,m)=>new Date(y,m,1).getDay();
+  const prev=()=>{if(vm===0){setVm(11);setVy(y=>y-1)}else setVm(m=>m-1)};
+  const next=()=>{if(vm===11){setVm(0);setVy(y=>y+1)}else setVm(m=>m+1)};
+  const selDay=d=>{onChange(fmtDMY(new Date(vy,vm,d)));setOpen(false)};
+
+  const cells=[];
+  for(let i=0;i<fd(vy,vm);i++)cells.push(null);
+  for(let d=1;d<=dim(vy,vm);d++)cells.push(d);
+  while(cells.length%7!==0)cells.push(null);
+
+  const isSel=d=>parsed&&d&&parsed.getFullYear()===vy&&parsed.getMonth()===vm&&parsed.getDate()===d;
+  const isTod=d=>d&&today.getFullYear()===vy&&today.getMonth()===vm&&today.getDate()===d;
+
+  return h("div",{ref,style:{position:"relative",display:"inline-block",width:"100%"}},
+    h("div",{style:{display:"flex",alignItems:"center",width:"100%"}},
+      h("input",{ref:inpRef,readOnly:true,value:value||"",placeholder:placeholder||"DD/MM/YYYY",
+        onClick:openCal,
+        style:{...(inputStyle||{}),cursor:"pointer",paddingRight:22,width:"100%",border:"none",background:"transparent",fontSize:12,textAlign:"center",outline:"none",color:"#0f172a",padding:"2px 0"}}),
+      h("span",{onClick:openCal,style:{position:"absolute",right:2,cursor:"pointer",fontSize:12,color:"#64748b",pointerEvents:"none"}},"📅")
+    ),
+    open&&h("div",{style:{position:"fixed",top:pos.top,left:pos.left,zIndex:99999,background:"#fff",border:"1px solid #cbd5e1",borderRadius:10,boxShadow:"0 8px 32px rgba(0,0,0,.22)",padding:10,minWidth:224}},
+      h("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}},
+        h("button",{onClick:prev,style:{background:"none",border:"none",cursor:"pointer",fontSize:16,color:"#475569",padding:"0 4px"}},"‹"),
+        h("span",{style:{fontWeight:700,fontSize:12,color:"#0f172a"}},MONTHS[vm]+" "+vy),
+        h("button",{onClick:next,style:{background:"none",border:"none",cursor:"pointer",fontSize:16,color:"#475569",padding:"0 4px"}},"›")
+      ),
+      h("div",{style:{display:"flex",justifyContent:"center",gap:3,marginBottom:8}},
+        [vy-2,vy-1,vy,vy+1,vy+2].map(y=>h("button",{key:y,onClick:()=>setVy(y),style:{fontSize:10,padding:"2px 5px",border:"1px solid",borderColor:y===vy?"#2563eb":"#e2e8f0",borderRadius:4,background:y===vy?"#2563eb":"#fff",color:y===vy?"#fff":"#475569",cursor:"pointer",fontWeight:y===vy?700:400}},y))
+      ),
+      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:4}},
+        WDAYS.map(d=>h("div",{key:d,style:{textAlign:"center",fontSize:10,fontWeight:700,color:"#94a3b8"}},d))
+      ),
+      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}},
+        cells.map((d,i)=>h("button",{key:i,onClick:()=>d&&selDay(d),style:{textAlign:"center",fontSize:11,padding:"4px 2px",border:"none",borderRadius:5,cursor:d?"pointer":"default",background:isSel(d)?"#2563eb":isTod(d)?"#eff6ff":"transparent",color:!d?"transparent":isSel(d)?"#fff":isTod(d)?"#2563eb":"#334155",fontWeight:isSel(d)||isTod(d)?700:400}},d||""))
+      ),
+      h("div",{style:{marginTop:8,textAlign:"center"}},
+        h("button",{onClick:()=>{const t=new Date();setVy(t.getFullYear());setVm(t.getMonth());selDay(t.getDate())},style:{fontSize:11,color:"#2563eb",background:"none",border:"none",cursor:"pointer",fontWeight:600}},"Today"),
+        h("button",{onClick:()=>{onChange("");setOpen(false)},style:{fontSize:11,color:"#94a3b8",background:"none",border:"none",cursor:"pointer",marginLeft:10}},"Clear")
+      )
+    )
+  );
+}
+
+// ── Report builder ────────────────────────────────────────────────────────────
+function buildReport(p){
+  const{serialNumber,customerNo,manufacturer,model,equipmentType,sharedRows,ranges,allRangesCalc,rangePassStatus,globalAllPass,extensionApproved,yearsText,preparedBy,orgName,reportDate}=p;
+  const certRows=sharedRows.map((sr,i)=>`<tr style="background:${i===0?"#fffbeb":i%2===0?"#fff":"#f9fafb"}"><td style="padding:5px 10px;border:1px solid #ddd;font-weight:700;color:${i===0?"#92400e":"#333"}">${i===0?"REF":i}</td><td style="padding:5px 10px;border:1px solid #ddd">${sr.calibrationDate||"\u2014"}</td><td style="padding:5px 10px;border:1px solid #ddd">${sr.certNo||"\u2014"}</td><td style="padding:5px 10px;border:1px solid #ddd;color:#555;font-style:italic">${i===0?"Reference year \u2013 base for comparison":"Comparison "+i+": vs row "+(i-1)}</td></tr>`).join("");
+  const rangeSummary=ranges.map((rng,ri)=>{const s=rangePassStatus[ri],c=s==="pass"?"#16a34a":s==="fail"?"#dc2626":"#999";return`<tr><td style="padding:6px 10px;border:1px solid #ddd;font-weight:600">${rng.label} [${unitOf(rng)}]</td><td style="padding:6px 10px;border:1px solid #ddd;text-align:center;font-weight:800;color:${c}">${s==="pass"?"\u2713 PASS":s==="fail"?"\u2717 FAIL":"\u2014"}</td></tr>`}).join("");
+  const verdict=extensionApproved
+    ?`<div style="background:#f0fdf4;border:2px solid #16a34a;border-radius:10px;padding:20px 24px;margin:16px 0"><div style="font-size:17px;font-weight:800;color:#16a34a;margin-bottom:8px">\u2713 CONCLUSION: Calibration Interval Extension APPROVED</div><p style="font-size:12px;color:#166534;line-height:1.7;margin-bottom:6px">All measurement ranges demonstrated stable performance. All decision criteria were satisfied for every range and every comparison period, and the drift prediction remains within tolerance.</p><p style="font-size:12px;color:#166534;font-weight:700">Serial Number: <u>${serialNumber||"N/A"}</u>${customerNo?" \u00b7 Customer No: <u>"+customerNo+"</u>":""} \u2014 calibration interval may be extended by ${yearsText||"one additional year"}.</p></div>`
+    :`<div style="background:#fef2f2;border:2px solid #dc2626;border-radius:10px;padding:20px 24px;margin:16px 0"><div style="font-size:17px;font-weight:800;color:#dc2626;margin-bottom:8px">\u2717 CONCLUSION: Calibration Interval Extension NOT APPROVED</div><p style="font-size:12px;color:#991b1b;line-height:1.7;margin-bottom:6px">One or more ranges did not satisfy all decision criteria, or the drift prediction exceeded tolerance.</p><p style="font-size:12px;color:#991b1b;font-weight:700">Serial Number: <u>${serialNumber||"N/A"}</u>${customerNo?" \u00b7 Customer No: <u>"+customerNo+"</u>":""} must be calibrated at the standard interval.</p></div>`;
+  const rangeDetails=ranges.map((rng,ri)=>{
+    const rCalc=allRangesCalc[ri],status=rangePassStatus[ri],sc=status==="pass"?"#16a34a":"#dc2626",sbg=status==="pass"?"#f0fdf4":"#fef2f2";
+    const unit=unitOf(rng),dec=rng.decimals;
+    const dataRows=sharedRows.map((shared,i)=>{
+      const isRef=i===0,calc=rCalc[i],rrow=rng.rows[i];
+      const prevVal=i>0&&rng.rows[i-1].measuredValue!==""?Number(rng.rows[i-1].measuredValue).toFixed(dec):"\u2014";
+      const dc=calc.decision==="PASS"?"#16a34a":calc.decision==="FAIL"?"#dc2626":"#999";
+      const nomD=rrow.nominalValue!==""&&!isNaN(parseFloat(rrow.nominalValue))?Number(rrow.nominalValue).toFixed(dec)+" "+unit:"\u2014";
+      const measD=rrow.measuredValue!==""&&!isNaN(parseFloat(rrow.measuredValue))?Number(rrow.measuredValue).toFixed(dec)+" "+unit:"\u2014";
+      const tolD=rrow.tolerance!==""&&!isNaN(parseFloat(rrow.tolerance))?Number(rrow.tolerance).toFixed(rng.tolDecimals)+" "+(rng.tolPrefix||"")+rng.quantity:(rrow.tolerance||"\u2014");
+      const uncD=rrow.uncertainty!==""&&!isNaN(parseFloat(rrow.uncertainty))?Number(rrow.uncertainty).toFixed(rng.uncDecimals)+" "+(rng.uncPrefix||"")+rng.quantity:(rrow.uncertainty||"\u2014");
+      return`<tr style="background:${isRef?"#fffbeb":i%2===0?"#fff":"#f9fafb"}"><td style="padding:5px 7px;border:1px solid #e2e8f0;font-weight:700;color:${isRef?"#92400e":"#555"}">${isRef?"REF":i}</td><td style="padding:5px 7px;border:1px solid #e2e8f0">${shared.calibrationDate||"\u2014"}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:right">${nomD}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:right">${measD}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:right;color:#1e40af;font-style:italic">${isRef?"\u2014":prevVal!=="\u2014"?prevVal+" "+unit:"\u2014"}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:right">${isRef?"\u2014":calc.drift!==null?fmt(calc.drift,dec)+" "+unit:"\u2014"}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:right">${isRef?"\u2014":calc.driftPerYear!==null?fmt(calc.driftPerYear,dec):"\u2014"}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:right">${tolD}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:right">${uncD}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:center;font-weight:700;color:${calc.tur!==null?(calc.tur>=3?"#16a34a":"#dc2626"):"#999"}">${fmt(calc.tur,2)}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:center">${rrow.adjustment!==""?rrow.adjustment:"\u2014"}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:center;color:${calc.usageScore>2?"#dc2626":"#16a34a"};font-weight:600">${(calc.usageScore!==null?calc.usageScore:"\u2014")}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:center;color:${calc.riskScore>2?"#dc2626":"#16a34a"};font-weight:600">${(calc.riskScore!==null?calc.riskScore:"\u2014")}</td><td style="padding:5px 7px;border:1px solid #e2e8f0;text-align:center;font-weight:800;color:${dc}">${(calc.decision||"\u2014")}</td><td style="padding:5px 7px;border:1px solid #e2e8f0">${shared.certNo||"\u2014"}</td></tr>`;
+    }).join("");
+    const analysis=rCalc.slice(1).map((calc,idx)=>{
+      const rn=idx+1,sh=sharedRows[rn];if(!calc.decision)return"";
+      if(calc.decision==="PASS")return`<div style="margin-top:6px;padding:8px 12px;background:#f0fdf4;border-left:3px solid #16a34a;border-radius:4px;font-size:11px;line-height:1.7"><strong>Row ${rn} (${sh.calibrationDate||"\u2014"}) \u2014 PASS:</strong> No adj \u00b7 TUR=${fmt(calc.tur,2)}\u22653 \u00b7 Drift OK \u00b7 Env=${calc.env}\u22642 \u00b7 Usage=${calc.usageScore}\u22642 \u00b7 Risk=${calc.riskScore}\u22642</div>`;
+      return`<div style="margin-top:6px;padding:8px 12px;background:#fef2f2;border-left:3px solid #dc2626;border-radius:4px;font-size:11px"><strong>Row ${rn} (${sh.calibrationDate||"\u2014"}) \u2014 FAIL:</strong><ul style="margin:4px 0 0 18px;padding:0;line-height:1.8">${calc.failReasons.map(r=>"<li>"+r+"</li>").join("")}</ul></div>`;
+    }).join("");
+    return`<div style="margin-bottom:28px"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;padding:10px 14px;background:${sbg};border:1.5px solid ${sc};border-radius:8px"><h3 style="margin:0;font-size:14px">${rng.label} <span style="font-size:11px;font-weight:400;color:#475569">[${unit}]</span></h3><span style="font-size:13px;font-weight:800;color:${sc}">${status==="pass"?"\u2713 ALL PASS":"\u2717 FAIL"}</span></div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="background:#0f172a;color:#e2e8f0"><th style="padding:6px 7px;border:1px solid #1e293b">#</th><th style="padding:6px 7px;border:1px solid #1e293b">Date</th><th style="padding:6px 7px;border:1px solid #1e293b">Nominal</th><th style="padding:6px 7px;border:1px solid #1e293b">Measured</th><th style="padding:6px 7px;border:1px solid #1e293b">Previous</th><th style="padding:6px 7px;border:1px solid #1e293b">Drift</th><th style="padding:6px 7px;border:1px solid #1e293b">Drift/Yr</th><th style="padding:6px 7px;border:1px solid #1e293b">Tolerance</th><th style="padding:6px 7px;border:1px solid #1e293b">Uncertainty</th><th style="padding:6px 7px;border:1px solid #1e293b">TUR</th><th style="padding:6px 7px;border:1px solid #1e293b">Adj</th><th style="padding:6px 7px;border:1px solid #1e293b">Usage</th><th style="padding:6px 7px;border:1px solid #1e293b">Risk</th><th style="padding:6px 7px;border:1px solid #1e293b">Decision</th><th style="padding:6px 7px;border:1px solid #1e293b">Cert.NO</th></tr></thead><tbody>${dataRows}</tbody></table></div>${analysis?"<div style='margin-top:10px'>"+analysis+"</div>":""}</div>`;
+  }).join("");
+  return`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Calibration Report \u2013 ${serialNumber||"Equipment"}</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;color:#0f172a;background:#fff;font-size:12px}.page{max-width:860px;margin:0 auto;padding:32px 36px}h2{font-size:13px;font-weight:700;border-bottom:2px solid #0f172a;padding-bottom:4px;margin:22px 0 10px;text-transform:uppercase;letter-spacing:.04em}.mg{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}.mi{background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px}.mi label{display:block;font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px}.mi span{font-size:12px;font-weight:600}.fml{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:6px}.fml td{padding:4px 8px;border:1px solid #e2e8f0}.fml td:first-child{font-weight:600;background:#f8fafc;width:32%}ul.crit{margin:0;padding:0 0 0 18px;font-size:11px;line-height:1.9;color:#334155}.sig{border:1px solid #e2e8f0;border-radius:8px;padding:16px 20px;margin-top:8px}.sl{border-top:1px solid #334155;margin-top:30px;width:200px;font-size:10px;color:#555;padding-top:4px}.disc{font-size:10px;color:#94a3b8;margin-top:20px;border-top:1px solid #e2e8f0;padding-top:10px;line-height:1.6}@media print{.noprint{display:none!important}.page{padding:16px 20px}}</style></head><body><div class="noprint" style="background:#1e40af;padding:12px 24px;display:flex;align-items:center;justify-content:space-between"><span style="color:#fff;font-weight:700;font-size:14px">Calibration Interval Evaluation Report</span><button onclick="window.print()" style="background:#fff;color:#1e40af;border:none;border-radius:8px;padding:9px 22px;font-size:13px;font-weight:700;cursor:pointer">\ud83d\udda8 Print / Save as PDF</button></div><div class="page"><div style="border-bottom:3px solid #0f172a;padding-bottom:14px;margin-bottom:18px"><div style="font-size:20px;font-weight:800">CALIBRATION INTERVAL EVALUATION REPORT</div><div style="font-size:10px;color:#64748b">ISO/IEC 17025:2017 \u00b7 ILAC G24 / OIML D10 \u00b7 JCGM 100 (GUM)</div></div><h2>1. Instrument Identification</h2><div class="mg"><div class="mi"><label>Serial Number</label><span>${serialNumber||"\u2014"}</span></div><div class="mi"><label>Customer No</label><span>${customerNo||"\u2014"}</span></div><div class="mi"><label>\u05d9\u05e6\u05e8\u05df / Manufacturer</label><span>${manufacturer||"\u2014"}</span></div><div class="mi"><label>\u05d3\u05d2\u05dd / Model</label><span>${model||"\u2014"}</span></div><div class="mi"><label>Equipment Type</label><span>${equipmentType==="mobile"?"Mobile (\u05e6\u05d9\u05d5\u05d3 \u05e0\u05d9\u05d9\u05d3)":"Stationary (\u05e6\u05d9\u05d5\u05d3 \u05e0\u05d9\u05d9\u05d7)"}</span></div><div class="mi"><label>Report Date</label><span>${reportDate}</span></div><div class="mi"><label>Historical Certificates in Analysis</label><span>${sharedRows.length} (1 reference + ${sharedRows.length-1} comparison)</span></div><div class="mi"><label>Prepared By</label><span>${preparedBy||"\u2014"}</span></div><div class="mi"><label>Organization</label><span>${orgName||"\u2014"}</span></div></div><div style="background:#f0fdf4;border:1.5px solid #86efac;border-radius:8px;padding:10px 16px;margin:0 0 16px;font-size:11px;display:flex;align-items:center;gap:10px"><span style="font-size:18px">\u2713</span><div><strong style="color:#16a34a">Certificate Exceedances: None reported</strong><br><span style="color:#166534">The operator confirmed no exceedances exist in any calibration certificate evaluated.</span></div></div><h2>2. Calibration Certificates Referenced</h2><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="background:#f1f5f9"><th style="padding:6px 10px;border:1px solid #ddd;text-align:left">#</th><th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Date</th><th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Certificate No.</th><th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Role</th></tr></thead><tbody>${certRows}</tbody></table><h2>3. Evaluation Result</h2>${verdict}<table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:10px"><thead><tr style="background:#f1f5f9"><th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Range</th><th style="padding:6px 10px;border:1px solid #ddd;text-align:center">Result</th></tr></thead><tbody>${rangeSummary}</tbody></table><h2>4. Methodology</h2><p style="font-size:11px;color:#334155;line-height:1.7;margin-bottom:10px">Follows <strong>ISO/IEC 17025:2017</strong> (Clauses 6.4.7, 7.6, 7.7, 7.8.6), <strong>ILAC G24/OIML D10</strong>, and <strong>JCGM 100:2008 (GUM)</strong>.</p><table class="fml"><tr><td>Drift</td><td>Measured\u2099 \u2212 Measured\u2099\u208b\u2081</td></tr><tr><td>Drift per Year</td><td>Drift \u00f7 Time Interval</td></tr><tr><td>TUR</td><td>Tolerance \u00f7 Uncertainty</td></tr><tr><td>Usage score</td><td>ROUND((Duration + Frequency) \u00f7 2, 0)</td></tr><tr><td>Risk score</td><td>ROUND((Usage score + Environment) \u00f7 2, 0)</td></tr></table><p style="font-size:11px;font-weight:700;margin:10px 0 5px">FAIL conditions:</p><ul class="crit"><li><strong>ADJUSTMENT = 1</strong></li><li><strong>TUR &lt; 3</strong></li><li><strong>Environment &gt; 2</strong></li><li><strong>Usage score &gt; 2</strong></li><li><strong>Risk score &gt; 2</strong></li><li><strong>|Measured \u2212 Nominal| + Uncertainty \u2265 Tolerance</strong> (exceedance)</li></ul><h2>5. Detailed Results by Range</h2>${rangeDetails}<h2>6. Authorization</h2><div class="sig"><div style="display:grid;grid-template-columns:1fr 1fr;gap:28px"><div><div class="sl">Prepared by: ${preparedBy||"________________________"}</div><div style="font-size:10px;color:#555;margin-top:8px">Date: ${reportDate}</div></div><div><div class="sl">Reviewed by: ________________________</div><div style="font-size:10px;color:#555;margin-top:8px">Date: ________________________</div></div></div></div><div class="disc">Generated by Calibration Interval Evaluation System. For inclusion in calibration file (\u05ea\u05d9\u05e7 \u05e6\u05d1\u05d3) and ANAB/ILAC auditor presentation.</div></div></body></html>`;
+}
+
+// ── Drift Prediction (VER 2.7) ── SYD-weighted forecast per range ─────────────
+// Computes Stage A (annual predicted rate), Stage B (predicted drift), Stage C (approval).
+// drifts = array of |Drift per Year| values, oldest first. tNext = 1 or 2 years.
+// latest = {measured, nominal, tolerance, uncertainty} from the most recent certificate.
+function computeDriftPrediction(drifts, tNext, latest){
+  const n = drifts.length; // number of drifts = certificates - 1
+  // Need at least 2 drifts (3 certificates)
+  if(n < 2) return {ok:null, reason:"need_more", nCerts:n+1};
+  if(n > 4) return {ok:null, reason:"too_many", nCerts:n+1};
+  const D = drifts.map(Math.abs);
+  let annualRate = null;
+  if(n === 2){
+    // N=3: max(|D1|,|D2|)
+    annualRate = Math.max(D[0], D[1]);
+  } else if(n === 3){
+    // N=4: SYD 0.167,0.333,0.500 (oldest->newest)
+    annualRate = 0.167*D[0] + 0.333*D[1] + 0.500*D[2];
+  } else if(n === 4){
+    // N=5: full SYD 0.10,0.20,0.30,0.40 (oldest->newest)
+    annualRate = 0.10*D[0] + 0.20*D[1] + 0.30*D[2] + 0.40*D[3];
+  }
+  if(annualRate === null || tNext == null || isNaN(tNext)) return {ok:null, reason:"incomplete", annualRate};
+  const {measured, nominal, tolerance, uncertainty} = latest;
+  if([measured,nominal,tolerance,uncertainty].some(v=>v==null||isNaN(v))) return {ok:null, reason:"incomplete", annualRate};
+  // Stage B: DriftPredicted = AnnualRate × Tnext
+  // Stage B: DriftPredicted = AnnualRate × (Tnext + 1)
+  // The client's choice extends BEYOND the current period: choice 1 -> ×2, choice 2 -> ×3
+  const yearsFactor = tNext + 1;
+  const driftPredicted = annualRate * yearsFactor;
+  // Stage C: |M-N| + DriftPredicted + U <= Tolerance
+  const lhs = Math.abs(measured - nominal) + driftPredicted + uncertainty;
+  // Floating-point tolerance: treat values within 1e-9 as equal so 0.10 <= 0.10 passes
+  const EPS = 1e-9;
+  const ok = lhs <= tolerance + EPS;
+  return {ok, annualRate, driftPredicted, yearsFactor, lhs, tolerance, tNext, nCerts:n+1};
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+function App(){
+  const[serialNumber,setSerialNumber]=useState("");
+  const[customerNo,setCustomerNo]=useState("");
+  const[manufacturer,setManufacturer]=useState("");
+  const[model,setModel]=useState("");
+  const[equipmentType,setEquipmentType]=useState("fixed");
+  const[sharedRows,setSharedRows]=useState(()=>[newSharedRow(),newSharedRow(),newSharedRow()]);
+  const[ranges,setRanges]=useState(()=>[newRange("Range 1",[null,null,null])]);
+  const[activeRange,setActiveRange]=useState(0);
+  const[showModal,setShowModal]=useState(false);
+  const[missingFields,setMissingFields]=useState([]);
+  const[preparedBy,setPreparedBy]=useState("");
+  const[orgName,setOrgName]=useState("");
+  const[reportDate,setReportDate]=useState(()=>new Date().toLocaleDateString("en-GB"));
+  const[view,setView]=useState("main");
+  const[reportHtml,setReportHtml]=useState("");
+  const[hasExceedance,setHasExceedance]=useState(null);
+  const[tNext,setTNext]=useState("");
+
+  const envOpts=equipmentType==="mobile"?ENV_MOB:ENV_FIX;
+  const range=ranges[activeRange];
+  const dec=range.decimals;
+  const unit=unitOf(range);
+
+  function syncRangeRows(ns,cr){return cr.map(r=>({...r,rows:ns.map((_,i)=>r.rows[i]||newRangeRow())}))}
+  function addSharedRow(){
+    if(sharedRows.length>=5)return;
+    const s=[...sharedRows,newSharedRow()];
+    setSharedRows(s);
+    setRanges(rs=>rs.map(rng=>{
+      const rows=s.map((_,i)=>rng.rows[i]||newRangeRow());
+      const newIdx=rows.length-1;
+      // Copy Nominal, Tolerance, Uncertainty from REF (row 0) into the newly added row
+      const nom=rng.rows[0]?rng.rows[0].nominalValue:"";
+      const tol=rng.rows[0]?rng.rows[0].tolerance:"";
+      const unc=rng.rows[0]?rng.rows[0].uncertainty:"";
+      rows[newIdx]={...rows[newIdx]};
+      if(rows[newIdx].nominalValue==="")rows[newIdx].nominalValue=nom;
+      if(rows[newIdx].tolerance==="")rows[newIdx].tolerance=tol;
+      if(rows[newIdx].uncertainty==="")rows[newIdx].uncertainty=unc;
+      return{...rng,rows};
+    }));
+  }
+  function removeSharedRow(idx){if(sharedRows.length<=3||idx===0)return;const s=sharedRows.filter((_,i)=>i!==idx);setSharedRows(s);setRanges(rs=>syncRangeRows(s,rs))}
+  function updateShared(idx,field,val){setSharedRows(rs=>rs.map((r,i)=>i===idx?{...r,[field]:val}:r))}
+  function updateRangeRow(ri,rowIdx,field,val){
+    setRanges(rs=>rs.map((rng,r)=>{
+      if(r!==ri)return rng;
+      // VER 2.14: Nominal, Tolerance, Uncertainty all copy from REF (row 0) — REF now has data
+      if(rowIdx===0&&(field==="nominalValue"||field==="tolerance"||field==="uncertainty")){
+        const cv=rng.rows[0][field];
+        return{...rng,rows:rng.rows.map((row,rowi)=>{if(rowi===0)return{...row,[field]:val};if(row[field]===""||row[field]===cv)return{...row,[field]:val};return row})};
+      }
+      return{...rng,rows:rng.rows.map((row,rowi)=>rowi!==rowIdx?row:{...row,[field]:val})};
+    }));
+  }
+  function updateRange(ri,field,val){setRanges(rs=>rs.map((r,i)=>i!==ri?r:{...r,[field]:val}))}
+  function addRange(){const l="Range "+(ranges.length+1);setRanges(rs=>[...rs,newRange(l,sharedRows)]);setActiveRange(ranges.length)}
+  function removeRange(idx){if(ranges.length<=1)return;setRanges(rs=>rs.filter((_,i)=>i!==idx));setActiveRange(prev=>Math.min(prev,ranges.length-2))}
+  function updateRangeLabel(idx,label){setRanges(rs=>rs.map((r,i)=>i===idx?{...r,label}:r))}
+
+  const calculated=sharedRows.map((sr,i)=>calcRow(range.rows[i],sr,i>0?parseFloat(range.rows[i-1].measuredValue):undefined,i===0));
+  const allRangesCalc=ranges.map(rng=>sharedRows.map((sr,i)=>calcRow(rng.rows[i],sr,i>0?parseFloat(rng.rows[i-1].measuredValue):undefined,i===0)));
+  const allCompDecisions=allRangesCalc.flatMap(rc=>rc.map(c=>c.decision));
+  const hasAnyDecision=allCompDecisions.some(d=>d!==null);
+  const globalAllPass=hasAnyDecision&&allCompDecisions.every(d=>d==="PASS");
+  const rangePassStatus=allRangesCalc.map(rc=>{if(!rc.some(c=>c.decision!==null))return"incomplete";return rc.every(c=>c.decision==="PASS")?"pass":"fail"});
+
+  // ── VER 2.16: Tnext constraint from LAST-ROW Time Interval (now a shared field) ──
+  // <=1yr => Tnext can be 1 or 2. >1 and <=2 => only 1. >2 => no extension.
+  const lastShared=sharedRows[sharedRows.length-1];
+  const maxTI=(lastShared&&lastShared.timeInterval!==""&&!isNaN(parseFloat(lastShared.timeInterval)))?parseFloat(lastShared.timeInterval):null;
+  // Determine allowed Tnext
+  let tNextMax=null; // null=unknown/no data, 0=none, 1=one year, 2=two years
+  if(maxTI!==null){
+    if(maxTI<=1)tNextMax=2;
+    else if(maxTI<=2)tNextMax=1;
+    else tNextMax=0;
+  }
+  // Per-range drift prediction (Stage A/B/C)
+  // VER 2.17: the stored tNext may be stale after Time Interval changes.
+  // Derive an EFFECTIVE value: a selection above the current allowance is invalid.
+  const tNextRaw=tNext===""?null:parseInt(tNext);
+  const tNextInvalid=tNextRaw!==null&&(tNextMax===null||tNextMax===0||tNextRaw>tNextMax);
+  const tNextNum=tNextInvalid?null:tNextRaw;
+  const rangePredictions=ranges.map((rng,ri)=>{
+    // Build drifts array (|Drift per Year|) oldest first, from row 1 onward
+    const rc=allRangesCalc[ri];
+    const drifts=[];
+    for(let i=1;i<rng.rows.length;i++){
+      const dpy=rc[i].driftPerYear;
+      if(dpy!==null&&!isNaN(dpy))drifts.push(dpy);
+    }
+    // Latest certificate = last row
+    const lastIdx=rng.rows.length-1;
+    const lastRow=rng.rows[lastIdx];
+    const latest={
+      measured:parseFloat(lastRow.measuredValue),
+      nominal:parseFloat(lastRow.nominalValue),
+      tolerance:parseFloat(lastRow.tolerance),
+      uncertainty:parseFloat(lastRow.uncertainty)
+    };
+    return computeDriftPrediction(drifts,tNextNum,latest);
+  });
+
+  // ── VER 2.10: Combined global verdict (rows PASS + drift prediction OK) ────
+  // "Approved" only when every range has all rows PASS AND its drift prediction passes.
+  const allPredictionsComplete=rangePredictions.every(p=>p.ok===true||p.ok===false);
+  const allPredictionsOk=rangePredictions.every(p=>p.ok===true);
+  // The whole extension is approved only if rows pass globally AND all predictions pass.
+  const extensionApproved=globalAllPass&&allPredictionsComplete&&allPredictionsOk;
+  // Any hard failure (a row failed, or a prediction failed)
+  const extensionFailed=(hasAnyDecision&&!globalAllPass)||rangePredictions.some(p=>p.ok===false);
+  // Ready to show a verdict at all (rows decided AND predictions resolved)
+  const verdictReady=hasAnyDecision&&allPredictionsComplete;
+  // Years text based on chosen Tnext (1 -> "one additional year", 2 -> "two additional years")
+  const yearsText=tNextNum===2?"two additional years":"one additional year";
+  // Auto-detected exceedance: any non-REF row where |Measured-Nominal|+Uncertainty >= Tolerance
+  const detectedExceedances=[];
+  ranges.forEach(rng=>{
+    const rc=allRangesCalc[ranges.indexOf(rng)];
+    rng.rows.forEach((row,i)=>{
+      // VER 2.14: REF now has data and is checked too
+      if(rc[i].exceedOk===false){
+        detectedExceedances.push({range:rng.label,row:i===0?"REF":i,cert:sharedRows[i].certNo||(i===0?"REF":"row "+i)});
+      }
+    });
+  });
+  const hasDetectedExceedance=detectedExceedances.length>0;
+
+  function validate(){
+    const miss=[];
+    if(!serialNumber.trim())miss.push("Serial Number");
+    if(!manufacturer.trim())miss.push("\u05d9\u05e6\u05e8\u05df (Manufacturer)");
+    if(!model.trim())miss.push("\u05d3\u05d2\u05dd (Model)");
+    sharedRows.forEach((sr,i)=>{
+      const rl=i===0?"REF":"\u05e9\u05d5\u05e8\u05d4 "+i;
+      if(!sr.calibrationDate)miss.push("Calibration Date ("+rl+")");
+      if(!sr.certNo)miss.push("Cert.NO ("+rl+")");
+      // VER 2.16: these four are shared across all ranges -> validate once per row
+      if(!sr.timeInterval)miss.push("Time Interval ("+rl+")");
+      if(!sr.duration)miss.push("Duration ("+rl+")");
+      if(!sr.frequency)miss.push("Frequency ("+rl+")");
+      if(!sr.environment)miss.push("Environment ("+rl+")");
+    });
+    ranges.forEach(rng=>{
+      sharedRows.forEach((_,i)=>{
+        const r=rng.rows[i];
+        const rl='Range "'+rng.label+'" '+(i===0?"REF":"\u05e9\u05d5\u05e8\u05d4 "+i);
+        if(!r.nominalValue)miss.push("Nominal Value ("+rl+")");
+        if(!r.measuredValue)miss.push("Measured Value ("+rl+")");
+        if(r.adjustment==="")miss.push("Adjustment ("+rl+")");
+        if(!r.tolerance)miss.push("Tolerance ("+rl+")");
+        if(!r.uncertainty)miss.push("Uncertainty ("+rl+")");
+      });
+    });
+    return miss;
+  }
+
+  function generateAndShow(){
+    if(hasDetectedExceedance){return;} // auto-detected exceedance blocks report
+    const miss=validate();
+    if(miss.length>0){setMissingFields(miss);return;}
+    setMissingFields([]);
+    const html=buildReport({serialNumber,customerNo,manufacturer,model,equipmentType,sharedRows,ranges,allRangesCalc,rangePassStatus,globalAllPass,extensionApproved,yearsText,preparedBy,orgName,reportDate});
+    setReportHtml(html);setShowModal(false);setView("report");
+  }
+  function downloadHtml(){
+    const blob=new Blob([reportHtml],{type:"text/html"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");a.href=url;a.download="CalibrationReport_"+(serialNumber||"Equipment")+".html";
+    document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
+  }
+
+  // Lock if: not answered, answered "yes", OR auto-detected exceedance
+  // Input lock: only when not answered or customer said "yes"
+  const locked=hasExceedance!=="no";
+  // Report lock: also when an exceedance is auto-detected in the data
+  const reportBlocked=locked||hasDetectedExceedance;
+  const sc=s=>s==="pass"?PASS_GREEN:s==="fail"?FAIL_RED:"#94a3b8";
+  const sl=s=>s==="pass"?"PASS":s==="fail"?"FAIL":"\u2014";
+  const cSel={border:"1px solid #cbd5e1",borderRadius:6,padding:"4px 6px",fontSize:12,background:"#fff",color:"#0f172a",cursor:"pointer"};
+  const thB=(red)=>({padding:"7px 8px",fontSize:11,fontWeight:700,textAlign:"center",background:"#0f172a",color:red?"#ff6b6b":"#e2e8f0",border:"1px solid #1e293b",whiteSpace:"nowrap",verticalAlign:"bottom"});
+  const tdA={padding:"5px 6px",background:AUTO_BG,border:"1px solid #e2e8f0",textAlign:"center",fontSize:12,color:"#334155"};
+  const tdI={padding:"3px 4px",background:INPUT_BG,border:"1px solid #fca5a5",textAlign:"center"};
+  const tdR={padding:"3px 4px",background:REF_BG,border:"1px solid "+REF_BORDER,textAlign:"center"};
+  // VER 2.16: locked (read-only) cell shown in ranges other than Range 1 for shared fields
+  const tdLocked={padding:"5px 6px",background:"#f1f5f9",border:"1px solid #e2e8f0",textAlign:"center",fontSize:12,color:"#64748b",fontStyle:"italic"};
+  const isR1=activeRange===0;
+  const inp={width:"100%",border:"none",background:"transparent",fontSize:12,textAlign:"center",outline:"none",color:"#0f172a",padding:"2px 0"};
+  const sel={width:"100%",border:"none",background:"transparent",fontSize:11,textAlign:"center",outline:"none",color:"#0f172a"};
+
+  if(view==="report")return h("div",{style:{fontFamily:"'Segoe UI',Arial,sans-serif",minHeight:"100vh",background:"#f1f5f9"}},
+    h("div",{style:{background:"#1e40af",padding:"12px 20px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}},
+      h("button",{onClick:()=>setView("main"),style:{background:"#fff",color:"#1e40af",border:"none",borderRadius:7,padding:"7px 16px",fontWeight:700,fontSize:12,cursor:"pointer"}},"\u2190 Back"),
+      h("span",{style:{color:"#fff",fontWeight:700,fontSize:14}},"Report \u2013 "+(serialNumber||"Equipment")),
+      h("div",{style:{marginLeft:"auto",display:"flex",gap:8}},
+        h("button",{onClick:downloadHtml,style:{background:"#fff",color:"#1e40af",border:"none",borderRadius:7,padding:"7px 16px",fontWeight:700,fontSize:12,cursor:"pointer"}},"\u2b07 Download HTML"),
+        h("button",{onClick:()=>document.getElementById("rframe").contentWindow.print(),style:{background:"#16a34a",color:"#fff",border:"none",borderRadius:7,padding:"7px 18px",fontWeight:700,fontSize:12,cursor:"pointer"}},"\ud83d\udda8 Print / Save PDF")
+      )
+    ),
+    h("div",{style:{padding:16}},
+      h("div",{style:{background:"#fff3cd",border:"1px solid #ffc107",borderRadius:8,padding:"10px 16px",marginBottom:12,fontSize:12,color:"#7d4e00"}},
+        "To save as PDF: click Print / Save PDF \u2192 choose ",h("strong",null,"Save as PDF"),"\u2192 Save."
+      ),
+      h("iframe",{id:"rframe",srcDoc:reportHtml,style:{width:"100%",height:"calc(100vh - 160px)",border:"none",borderRadius:8,boxShadow:"0 2px 8px rgba(0,0,0,.15)"},title:"Report"})
+    )
+  );
+
+  return h("div",{style:{fontFamily:"'Segoe UI',Arial,sans-serif",direction:"ltr",background:"#f1f5f9",minHeight:"100vh",paddingBottom:60}},
+
+    // Missing fields modal
+    missingFields.length>0&&h("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"}},
+      h("div",{style:{background:"#fff",borderRadius:14,padding:"24px 28px",width:460,maxWidth:"92vw",maxHeight:"80vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.35)"}},
+        h("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:12}},
+          h("span",{style:{fontSize:22}},"\u26a0\ufe0f"),
+          h("div",{style:{fontSize:15,fontWeight:700,color:"#dc2626"}},'\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05d4\u05e4\u05d9\u05e7 \u05d3\u05d5"\u05d7 \u2013 \u05e9\u05d3\u05d5\u05ea \u05d7\u05e1\u05e8\u05d9\u05dd')
+        ),
+        h("div",{style:{fontSize:12,color:"#475569",marginBottom:10}},"\u05d9\u05e9 \u05dc\u05de\u05dc\u05d0 \u05d0\u05ea \u05db\u05dc \u05d4\u05e9\u05d3\u05d5\u05ea \u05d4\u05d1\u05d0\u05d9\u05dd:"),
+        h("div",{style:{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:8,padding:"10px 14px",maxHeight:280,overflowY:"auto"}},
+          missingFields.map((f,i)=>h("div",{key:i,style:{display:"flex",alignItems:"center",gap:8,padding:"5px 0",borderBottom:"1px solid #fee2e2",fontSize:13,color:"#7f1d1d"}},
+            h("span",{style:{color:"#dc2626",fontWeight:700}},"\u2717"),
+            h("span",null,f)
+          ))
+        ),
+        h("div",{style:{marginTop:6,fontSize:11,color:"#94a3b8"}},missingFields.length+" \u05e9\u05d3\u05d5\u05ea \u05d7\u05e1\u05e8\u05d9\u05dd"),
+        h("div",{style:{display:"flex",justifyContent:"flex-end",marginTop:16}},
+          h("button",{onClick:()=>setMissingFields([]),style:{padding:"8px 22px",border:"none",borderRadius:8,background:"#0f172a",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}},"\u05d4\u05d1\u05e0\u05ea\u05d9 \u2013 \u05d7\u05d6\u05d5\u05e8 \u05dc\u05d8\u05d5\u05e4\u05e1")
+        )
+      )
+    ),
+
+    // Report modal
+    showModal&&h("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}},
+      h("div",{style:{background:"#fff",borderRadius:14,padding:"28px 32px",width:420,boxShadow:"0 20px 60px rgba(0,0,0,.3)"}},
+        h("h3",{style:{margin:"0 0 14px",fontSize:16}},"Generate PDF Report"),
+        h("p",{style:{fontSize:12,color:"#64748b",margin:"0 0 16px",lineHeight:1.6}},"Formatted for ANAB/ILAC auditors."),
+        h("div",{style:{marginBottom:12}},
+          h("label",{style:{fontSize:12,fontWeight:600,color:"#334155",display:"block",marginBottom:4}},"Report Date"),
+          h(DatePicker,{value:reportDate,onChange:setReportDate,placeholder:"DD/MM/YYYY",inputStyle:{width:"100%",border:"1px solid #cbd5e1",borderRadius:6,padding:"7px 10px",fontSize:12,background:"#fff",color:"#0f172a"}})
+        ),
+        [["Prepared By",preparedBy,setPreparedBy,"Name / ID"],["Organization / Laboratory",orgName,setOrgName,"Lab or company name"]].map(function(arr){
+          return h("div",{key:arr[0],style:{marginBottom:12}},
+            h("label",{style:{fontSize:12,fontWeight:600,color:"#334155",display:"block",marginBottom:4}},arr[0]),
+            h("input",{value:arr[1],onChange:function(e){arr[2](e.target.value)},placeholder:arr[3],style:{width:"100%",border:"1px solid #cbd5e1",borderRadius:6,padding:"7px 10px",fontSize:12}})
+          );
+        }),
+        h("div",{style:{display:"flex",gap:10,justifyContent:"flex-end",marginTop:20}},
+          h("button",{onClick:()=>setShowModal(false),style:{padding:"8px 18px",border:"1px solid #cbd5e1",borderRadius:8,background:"#fff",color:"#475569",fontSize:13,cursor:"pointer"}},"Cancel"),
+          h("button",{onClick:generateAndShow,style:{padding:"8px 20px",border:"none",borderRadius:8,background:"#0f172a",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}},"Preview Report \u2192")
+        )
+      )
+    ),
+
+    // Header
+    h("div",{style:{background:"#0f172a",color:"#fff",padding:"16px 28px",display:"flex",alignItems:"center",justifyContent:"space-between"}},
+      h("div",null,
+        h("div",{style:{fontSize:19,fontWeight:700,marginBottom:2}},"Calibration Interval Evaluation"),
+        h("div",{style:{fontSize:11,color:"#94a3b8"}},"ISO/IEC 17025:2017 \u00b7 ILAC G24 / OIML D10 \u00b7 JCGM 100 (GUM)")
+      ),
+      h("button",{onClick:()=>!reportBlocked&&setShowModal(true),style:{background:reportBlocked?"#94a3b8":"#2563eb",color:"#fff",border:"none",borderRadius:8,padding:"9px 18px",fontSize:13,fontWeight:700,cursor:reportBlocked?"not-allowed":"pointer",opacity:reportBlocked?0.6:1}},"\ud83d\udcc4 Generate PDF Report")
+    ),
+
+    h("div",{style:{maxWidth:1400,margin:"0 auto",padding:"20px 16px"}},
+
+      // Exceedance gate
+      h("div",{style:{marginBottom:16,borderRadius:12,border:hasExceedance===null?"2px solid #fbbf24":hasExceedance==="yes"?"2px solid #fca5a5":"2px solid #86efac",background:hasExceedance===null?"#fffbeb":hasExceedance==="yes"?"#fef2f2":"#f0fdf4",padding:"16px 20px"}},
+        h("div",{style:{fontWeight:700,fontSize:13,color:"#0f172a",marginBottom:10}},"\u05e9\u05d0\u05dc\u05ea \u05e1\u05d9\u05e0\u05d5\u05df \u05e8\u05d0\u05e9\u05d5\u05e0\u05d9\u05ea \u2013 \u05d9\u05e9 \u05dc\u05e2\u05e0\u05d5\u05ea \u05dc\u05e4\u05e0\u05d9 \u05de\u05d9\u05dc\u05d5\u05d9 \u05d4\u05d8\u05d5\u05e4\u05e1"),
+        h("div",{style:{fontSize:13,color:"#334155",marginBottom:12}},"\u05d4\u05d0\u05dd \u05e7\u05d9\u05d9\u05de\u05d5\u05ea \u05d7\u05e8\u05d9\u05d2\u05d5\u05ea \u05d1\u05d0\u05d7\u05ea \u05de\u05ea\u05e2\u05d5\u05d3\u05d5\u05ea \u05d4\u05db\u05d9\u05d5\u05dc \u05d4\u05e0\u05d1\u05d3\u05e7\u05d5\u05ea?"),
+        h("div",{style:{display:"flex",gap:10,flexWrap:"wrap"}},
+          h("button",{onClick:()=>setHasExceedance("yes"),style:{padding:"9px 22px",borderRadius:8,border:"2px solid",borderColor:hasExceedance==="yes"?FAIL_RED:"#e2e8f0",background:hasExceedance==="yes"?"#fee2e2":"#fff",color:hasExceedance==="yes"?FAIL_RED:"#475569",fontWeight:700,fontSize:13,cursor:"pointer"}},"\u05db\u05df \u2013 \u05e7\u05d9\u05d9\u05de\u05ea \u05d7\u05e8\u05d9\u05d2\u05d4"),
+          h("button",{onClick:()=>setHasExceedance("no"),style:{padding:"9px 22px",borderRadius:8,border:"2px solid",borderColor:hasExceedance==="no"?PASS_GREEN:"#e2e8f0",background:hasExceedance==="no"?"#dcfce7":"#fff",color:hasExceedance==="no"?PASS_GREEN:"#475569",fontWeight:700,fontSize:13,cursor:"pointer"}},"\u05dc\u05d0 \u2013 \u05d0\u05d9\u05df \u05d7\u05e8\u05d9\u05d2\u05d5\u05ea"),
+          hasExceedance!==null&&h("button",{onClick:()=>setHasExceedance(null),style:{padding:"9px 16px",borderRadius:8,border:"1px solid #e2e8f0",background:"#f8fafc",color:"#94a3b8",fontSize:12,cursor:"pointer"}},"\u05e0\u05e7\u05d4")
+        ),
+        hasExceedance==="yes"&&h("div",{style:{marginTop:14,padding:"14px 18px",background:"#fff",border:"1px solid #fca5a5",borderRadius:10}},
+          h("div",{style:{fontSize:15,fontWeight:800,color:FAIL_RED,marginBottom:6}},"\u2717 \u05d4\u05d8\u05d5\u05e4\u05e1 \u05e0\u05e2\u05d5\u05dc \u2013 \u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05d4\u05d0\u05e8\u05d9\u05da \u05ea\u05d5\u05e7\u05e3 \u05db\u05d9\u05d5\u05dc"),
+          h("div",{style:{fontSize:12,color:"#7f1d1d",lineHeight:1.7}},"\u05e7\u05d9\u05d5\u05de\u05df \u05e9\u05dc \u05d7\u05e8\u05d9\u05d2\u05d5\u05ea \u05d1\u05ea\u05e2\u05d5\u05d3\u05d5\u05ea \u05d4\u05db\u05d9\u05d5\u05dc \u05de\u05d4\u05d5\u05d5\u05ea \u05d1\u05e1\u05d9\u05e1 \u05dc\u05d0\u05d9 \u05d4\u05ea\u05d0\u05de\u05d4 \u05d1\u05d4\u05ea\u05d0\u05dd \u05dc-ISO/IEC 17025:2017 \u05d5-ILAC G24.")
+        ),
+        hasExceedance===null&&h("div",{style:{marginTop:10,fontSize:11,color:"#92400e"}},"\u26a0 \u05d9\u05e9 \u05dc\u05e2\u05e0\u05d5\u05ea \u05e2\u05dc \u05e9\u05d0\u05dc\u05d4 \u05d6\u05d5 \u05db\u05d3\u05d9 \u05dc\u05d4\u05de\u05e9\u05d9\u05da \u05dc\u05de\u05d9\u05dc\u05d5\u05d9 \u05d4\u05d8\u05d5\u05e4\u05e1")
+      ),
+
+      hasDetectedExceedance&&h("div",{style:{marginBottom:16,borderRadius:12,border:"2px solid #dc2626",background:"#fef2f2",padding:"16px 20px"}},
+        h("div",{style:{display:"flex",alignItems:"flex-start",gap:12}},
+          h("span",{style:{fontSize:24,flexShrink:0}},"\ud83d\udd12"),
+          h("div",{style:{flex:1}},
+            h("div",{style:{fontSize:16,fontWeight:800,color:FAIL_RED,marginBottom:6}},"\u05d4\u05de\u05e2\u05e8\u05db\u05ea \u05d6\u05d9\u05d4\u05ea\u05d4 \u05d7\u05e8\u05d9\u05d2\u05d4 \u2013 \u05d4\u05d8\u05d5\u05e4\u05e1 \u05e0\u05e2\u05d5\u05dc"),
+            h("div",{style:{fontSize:12,color:"#7f1d1d",lineHeight:1.7,marginBottom:10}},
+              "\u05d0\u05e3 \u05e2\u05dc \u05e4\u05d9 \u05e9\u05d4\u05d5\u05e6\u05d4\u05e8 \u05db\u05d9 \u05d0\u05d9\u05df \u05d7\u05e8\u05d9\u05d2\u05d5\u05ea, \u05d1\u05d3\u05d9\u05e7\u05d4 \u05d0\u05d5\u05d8\u05d5\u05de\u05d8\u05d9\u05ea \u05d2\u05d9\u05dc\u05ea\u05d4 \u05d7\u05e8\u05d9\u05d2\u05d4: |Measured \u2212 Nominal| + Uncertainty \u2265 Tolerance.",
+              h("br"),
+              "\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05d4\u05e4\u05d9\u05e7 \u05d3\u05d5\"\u05d7 \u05d0\u05d5 \u05dc\u05d4\u05d0\u05e8\u05d9\u05da \u05ea\u05d5\u05e7\u05e3 \u05db\u05d9\u05d5\u05dc, \u05d1\u05d4\u05ea\u05d0\u05dd \u05dc-ISO/IEC 17025:2017 \u05d5-ILAC G24."
+            ),
+            h("div",{style:{background:"#fff",border:"1px solid #fca5a5",borderRadius:8,padding:"8px 12px"}},
+              h("div",{style:{fontSize:11,fontWeight:700,color:"#991b1b",marginBottom:4}},"\u05e9\u05d5\u05e8\u05d5\u05ea \u05e2\u05dd \u05d7\u05e8\u05d9\u05d2\u05d4:"),
+              detectedExceedances.map((e,idx)=>h("div",{key:idx,style:{fontSize:11,color:"#7f1d1d",padding:"2px 0"}},
+                "\u2717 Range '"+e.range+"' \u2013 \u05e9\u05d5\u05e8\u05d4 "+e.row+" (Cert: "+e.cert+")"
+              ))
+            )
+          )
+        )
+      ),
+
+      h("div",{style:{opacity:locked?0.3:1,pointerEvents:locked?"none":"auto"}},
+
+        // Equipment details card
+        h("div",{style:{background:"#fff",border:"1px solid #e2e8f0",borderRadius:10,padding:"12px 16px",marginBottom:14}},
+          h("div",{style:{fontSize:12,fontWeight:700,color:"#0f172a",marginBottom:8}},"\u05e4\u05e8\u05d8\u05d9 \u05e6\u05d9\u05d5\u05d3"),
+          h("div",{style:{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}},
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},
+              h("span",{style:{fontSize:12,fontWeight:700,color:RED}},"Serial Number"),
+              h("input",{value:serialNumber,onChange:e=>setSerialNumber(e.target.value),style:{border:"1.5px solid #fca5a5",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:600,width:130,background:INPUT_BG},placeholder:"e.g. 6502394"})
+            ),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},
+              h("span",{style:{fontSize:12,fontWeight:600,color:"#475569"}},"Customer No"),
+              h("input",{value:customerNo,onChange:e=>setCustomerNo(e.target.value),style:{border:"1px solid #cbd5e1",borderRadius:6,padding:"5px 10px",fontSize:13,width:120,background:"#fff"},placeholder:"optional"})
+            ),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},
+              h("span",{style:{fontSize:12,fontWeight:700,color:RED}},"\u05d9\u05e6\u05e8\u05df"),
+              h("input",{value:manufacturer,onChange:e=>setManufacturer(e.target.value),style:{border:"1.5px solid #fca5a5",borderRadius:6,padding:"5px 10px",fontSize:13,width:120,background:INPUT_BG},placeholder:"e.g. Fluke"})
+            ),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},
+              h("span",{style:{fontSize:12,fontWeight:700,color:RED}},"\u05d3\u05d2\u05dd"),
+              h("input",{value:model,onChange:e=>setModel(e.target.value),style:{border:"1.5px solid #fca5a5",borderRadius:6,padding:"5px 10px",fontSize:13,width:120,background:INPUT_BG},placeholder:"e.g. 87V"})
+            ),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},
+              h("span",{style:{fontSize:12,fontWeight:600,color:"#475569"}},"\u05e1\u05d5\u05d2 \u05e6\u05d9\u05d5\u05d3:"),
+              h("select",{value:equipmentType,onChange:e=>setEquipmentType(e.target.value),style:cSel},
+                h("option",{value:"fixed"},"\u05e6\u05d9\u05d5\u05d3 \u05e0\u05d9\u05d9\u05d7"),
+                h("option",{value:"mobile"},"\u05e6\u05d9\u05d5\u05d3 \u05e0\u05d9\u05d9\u05d3")
+              )
+            ),
+            h("div",{style:{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}},
+              h("span",{style:{fontSize:11,color:"#94a3b8"}},sharedRows.length+" historical certificates"),
+              h("button",{onClick:addSharedRow,disabled:sharedRows.length>=5,style:{background:sharedRows.length>=5?"#e2e8f0":"#1e40af",color:sharedRows.length>=5?"#94a3b8":"#fff",border:"none",borderRadius:6,padding:"6px 14px",fontSize:12,cursor:sharedRows.length>=5?"default":"pointer",fontWeight:600}},"+ Add Year")
+            )
+          )
+        ),
+
+        // Legend
+        h("div",{style:{display:"flex",gap:18,marginBottom:12,fontSize:11,color:"#64748b",flexWrap:"wrap"}},
+          h("span",{style:{display:"flex",alignItems:"center",gap:4}},h("span",{style:{width:12,height:12,background:REF_BG,border:"1px solid "+REF_BORDER,display:"inline-block",borderRadius:2}}),"REF \u2013 Reference year"),
+          h("span",{style:{display:"flex",alignItems:"center",gap:4}},h("span",{style:{width:12,height:12,background:INPUT_BG,border:"1px solid #fca5a5",display:"inline-block",borderRadius:2}}),h("span",{style:{color:RED,fontWeight:700}},"Red")," \u2013 User input"),
+          h("span",{style:{display:"flex",alignItems:"center",gap:4}},h("span",{style:{width:12,height:12,background:AUTO_BG,border:"1px solid #e2e8f0",display:"inline-block",borderRadius:2}}),"Auto-calculated")
+        ),
+
+        // Verdict
+        verdictReady&&h("div",{style:{marginBottom:16,borderRadius:10,padding:"12px 20px",background:extensionApproved?"#f0fdf4":"#fef2f2",border:"2px solid "+(extensionApproved?"#86efac":"#fca5a5"),display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}},
+          h("div",null,
+            h("div",{style:{fontSize:15,fontWeight:800,color:extensionApproved?PASS_GREEN:FAIL_RED}},extensionApproved?"\u2713 Extension approved":"\u2717 Extension not approved"),
+            h("div",{style:{fontSize:11,color:"#475569",marginTop:2}},"All ranges must PASS all rows AND pass drift prediction.")
+          ),
+          h("div",{style:{display:"flex",gap:8,flexWrap:"wrap"}},
+            ranges.map((rng,ri)=>h("div",{key:rng.id,onClick:()=>setActiveRange(ri),style:{padding:"4px 12px",borderRadius:20,fontSize:12,fontWeight:700,cursor:"pointer",background:rangePassStatus[ri]==="pass"?"#dcfce7":rangePassStatus[ri]==="fail"?"#fee2e2":"#f1f5f9",color:sc(rangePassStatus[ri]),border:"1px solid "+(rangePassStatus[ri]==="pass"?"#86efac":rangePassStatus[ri]==="fail"?"#fca5a5":"#e2e8f0")}},rng.label+" ["+unitOf(rng)+"]: "+sl(rangePassStatus[ri])))
+          )
+        ),
+
+        // Tabs
+        h("div",{style:{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}},
+          ranges.map((rng,ri)=>h("div",{key:rng.id,onClick:()=>setActiveRange(ri),style:{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:"8px 8px 0 0",cursor:"pointer",fontSize:13,fontWeight:600,background:ri===activeRange?"#fff":"#e2e8f0",color:ri===activeRange?"#0f172a":"#64748b",border:ri===activeRange?"1px solid #cbd5e1":"1px solid transparent",borderBottom:ri===activeRange?"1px solid #fff":"1px solid #cbd5e1",marginBottom:ri===activeRange?-1:0,zIndex:ri===activeRange?2:1}},
+            h("span",{style:{width:8,height:8,borderRadius:"50%",background:sc(rangePassStatus[ri]),display:"inline-block"}}),
+            h("input",{value:rng.label,onChange:e=>{e.stopPropagation();updateRangeLabel(ri,e.target.value)},onClick:e=>e.stopPropagation(),style:{border:"none",background:"transparent",fontSize:13,fontWeight:600,color:"inherit",outline:"none",width:80,cursor:"text"}}),
+            h("span",{style:{fontSize:11,color:"#94a3b8",fontWeight:400}},"["+unitOf(rng)+"]"),
+            ranges.length>1&&h("span",{onClick:e=>{e.stopPropagation();removeRange(ri)},style:{color:"#94a3b8",fontSize:12,cursor:"pointer"}},"\u2715")
+          )),
+          h("button",{onClick:addRange,style:{padding:"7px 14px",borderRadius:"8px 8px 0 0",border:"1px dashed #cbd5e1",background:"transparent",color:"#64748b",fontSize:12,cursor:"pointer",fontWeight:600}},"+ Add Range")
+        ),
+
+        // Unit controls
+        h("div",{style:{background:"#fff",border:"1px solid #cbd5e1",borderTop:"none",borderRadius:"0 8px 0 0",padding:"10px 14px",display:"flex",flexDirection:"column",gap:0}},
+          h("div",{style:{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",borderBottom:"1px solid #f1f5f9",paddingBottom:8,marginBottom:8}},
+            h("span",{style:{fontSize:11,fontWeight:700,color:"#1e40af",minWidth:110}},"Measured Value:"),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},h("span",{style:{fontSize:11,color:"#475569"}},"Quantity:"),h("select",{value:range.quantity,onChange:e=>updateRange(activeRange,"quantity",e.target.value),style:{...cSel,minWidth:150}},QUANTITIES.map(q=>h("option",{key:q.sym,value:q.sym},q.label)))),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},h("span",{style:{fontSize:11,color:"#475569"}},"Prefix:"),h("select",{value:range.prefix,onChange:e=>updateRange(activeRange,"prefix",e.target.value),style:{...cSel,minWidth:120}},PREFIXES.map(p=>h("option",{key:p.sym,value:p.sym},p.label)))),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},h("span",{style:{fontSize:11,color:"#475569"}},"Decimals:"),h("select",{value:range.decimals,onChange:e=>updateRange(activeRange,"decimals",parseInt(e.target.value)),style:{...cSel,minWidth:60}},[0,1,2,3,4,5,6].map(d=>h("option",{key:d,value:d},d)))),
+            h("span",{style:{fontSize:11,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:5,padding:"2px 10px",color:"#1e40af",fontWeight:700}},(range.prefix||"")+(range.quantity)+" \u00b7 0."+"0".repeat(range.decimals))
+          ),
+          h("div",{style:{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",borderBottom:"1px solid #f1f5f9",paddingBottom:8,marginBottom:8}},
+            h("span",{style:{fontSize:11,fontWeight:700,color:"#7c3aed",minWidth:110}},"Tolerance:"),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},h("span",{style:{fontSize:11,color:"#475569"}},"Prefix:"),h("select",{value:range.tolPrefix,onChange:e=>updateRange(activeRange,"tolPrefix",e.target.value),style:{...cSel,minWidth:120}},PREFIXES.map(p=>h("option",{key:p.sym,value:p.sym},p.label)))),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},h("span",{style:{fontSize:11,color:"#475569"}},"Decimals:"),h("select",{value:range.tolDecimals,onChange:e=>updateRange(activeRange,"tolDecimals",parseInt(e.target.value)),style:{...cSel,minWidth:60}},[0,1,2,3,4,5,6].map(d=>h("option",{key:d,value:d},d)))),
+            h("span",{style:{fontSize:11,background:"#faf5ff",border:"1px solid #e9d5ff",borderRadius:5,padding:"2px 10px",color:"#7c3aed",fontWeight:700}},(range.tolPrefix||"")+(range.quantity)+" \u00b7 0."+"0".repeat(range.tolDecimals))
+          ),
+          h("div",{style:{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}},
+            h("span",{style:{fontSize:11,fontWeight:700,color:"#b45309",minWidth:110}},"Uncertainty:"),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},h("span",{style:{fontSize:11,color:"#475569"}},"Prefix:"),h("select",{value:range.uncPrefix,onChange:e=>updateRange(activeRange,"uncPrefix",e.target.value),style:{...cSel,minWidth:120}},PREFIXES.map(p=>h("option",{key:p.sym,value:p.sym},p.label)))),
+            h("div",{style:{display:"flex",alignItems:"center",gap:6}},h("span",{style:{fontSize:11,color:"#475569"}},"Decimals:"),h("select",{value:range.uncDecimals,onChange:e=>updateRange(activeRange,"uncDecimals",parseInt(e.target.value)),style:{...cSel,minWidth:60}},[0,1,2,3,4,5,6].map(d=>h("option",{key:d,value:d},d)))),
+            h("span",{style:{fontSize:11,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:5,padding:"2px 10px",color:"#b45309",fontWeight:700}},(range.uncPrefix||"")+(range.quantity)+" \u00b7 0."+"0".repeat(range.uncDecimals))
+          )
+        ),
+
+
+        !isR1&&h("div",{style:{marginBottom:8,padding:"8px 14px",background:"#f1f5f9",border:"1px solid #cbd5e1",borderRadius:8,fontSize:11,color:"#475569",display:"flex",alignItems:"center",gap:8}},
+          h("span",{style:{fontSize:14}},"\ud83d\udd12"),
+          h("span",null,"Calibration Date, Time Interval, \u05d6\u05de\u05df \u05e2\u05d1\u05d5\u05d3\u05d4, \u05ea\u05d3\u05d9\u05e8\u05d5\u05ea \u05e9\u05d9\u05de\u05d5\u05e9, Environment \u05d5-Cert.NO \u05de\u05e9\u05d5\u05ea\u05e4\u05d9\u05dd \u05dc\u05db\u05dc \u05d4\u05d8\u05d5\u05d5\u05d7\u05d9\u05dd \u2013 \u05e0\u05d9\u05ea\u05df \u05dc\u05e2\u05e8\u05d5\u05da \u05d0\u05d5\u05ea\u05dd \u05d1-Range 1 \u05d1\u05dc\u05d1\u05d3.")
+        ),
+        // Main table
+        h("div",{style:{overflowX:"auto",background:"#fff",border:"1px solid #cbd5e1",borderTop:"none",borderRadius:"0 0 8px 8px",boxShadow:"0 1px 4px rgba(0,0,0,.08)"}},
+          h("table",{style:{borderCollapse:"collapse",width:"100%",minWidth:1100}},
+            h("thead",null,
+              h("tr",null,
+                h("th",{style:thB(false),rowSpan:2},"#"),
+                h("th",{style:thB(true),rowSpan:2},"Calibration",h("br"),"Date"),
+                h("th",{style:thB(true),rowSpan:2},"Nominal Value",h("br"),h("span",{style:{fontWeight:400,color:"#fca5a5",fontSize:10}},"["+unit+"]")),
+                h("th",{style:thB(true),rowSpan:2},"Measured Value",h("br"),h("span",{style:{fontWeight:400,color:"#94a3b8",fontSize:10}},"["+unit+"]")),
+                h("th",{style:{...thB(false),color:"#94a3b8"},rowSpan:2},"Previous Value",h("br"),h("span",{style:{fontWeight:400,fontSize:10}},"["+unit+"]")),
+                h("th",{style:thB(true),rowSpan:2},"Time",h("br"),"Interval"),
+                h("th",{style:thB(true),rowSpan:2},"ADJUSTMENT",h("br"),"(0,1)"),
+                h("th",{style:thB(false),rowSpan:2},"Drift",h("br"),h("span",{style:{fontWeight:400,fontSize:10}},"["+unit+"]")),
+                h("th",{style:thB(false),rowSpan:2},"Drift per",h("br"),"Year"),
+                h("th",{style:thB(true),rowSpan:2},"Tolerance",h("br"),h("span",{style:{fontWeight:400,color:"#d8b4fe",fontSize:10}},"["+(range.tolPrefix||"")+range.quantity+"]")),
+                h("th",{style:thB(true),rowSpan:2},"Uncertainty",h("br"),h("span",{style:{fontWeight:400,color:"#fcd34d",fontSize:10}},"["+(range.uncPrefix||"")+range.quantity+"]")),
+                h("th",{style:thB(false),rowSpan:2},"TUR"),
+                h("th",{style:thB(true),colSpan:2},"Duration | Frequency"),
+                h("th",{style:thB(true),rowSpan:2},"Environment",h("br"),"(1-5)"),
+                h("th",{style:thB(false),rowSpan:2},"Usage",h("br"),"score"),
+                h("th",{style:thB(false),rowSpan:2},"Risk",h("br"),"score"),
+                h("th",{style:thB(false),rowSpan:2},"No",h("br"),"Exceedance?"),
+                h("th",{style:thB(false),rowSpan:2},"Decision"),
+                h("th",{style:thB(true),rowSpan:2},"Cert.NO"),
+                h("th",{style:thB(false),rowSpan:2})
+              ),
+              h("tr",null,
+                h("th",{style:{...thB(true),fontSize:10}},"\u05d6\u05de\u05df \u05e2\u05d1\u05d5\u05d3\u05d4"),
+                h("th",{style:{...thB(true),fontSize:10}},"\u05ea\u05d3\u05d9\u05e8\u05d5\u05ea \u05e9\u05d9\u05de\u05d5\u05e9")
+              )
+            ),
+            h("tbody",null,
+              sharedRows.map((shared,i)=>{
+                const isRef=i===0;
+                const rrow=range.rows[i];
+                const calc=calculated[i];
+                const prevVal=i>0&&range.rows[i-1].measuredValue!==""?Number(range.rows[i-1].measuredValue).toFixed(dec):"";
+                const decCol=calc.decision==="PASS"?PASS_GREEN:calc.decision==="FAIL"?FAIL_RED:"#94a3b8";
+                const turCol=calc.tur!==null?(calc.tur>=3?PASS_GREEN:FAIL_RED):"#94a3b8";
+                const driftCol=calc.drift!==null&&parseFloat(rrow.uncertainty)?(Math.abs(calc.drift)>parseFloat(rrow.uncertainty)?FAIL_RED:"#334155"):"#334155";
+                const rowBg=isRef?"#fffdf0":i%2===0?"#fff":"#f8fafc";
+                const measDisplay=rrow.measuredValue!==""&&!isNaN(parseFloat(rrow.measuredValue))?Number(rrow.measuredValue).toFixed(dec):rrow.measuredValue;
+
+                return h("tr",{key:shared.id,style:{background:rowBg}},
+                  h("td",{style:{...tdA,background:isRef?"#fef9c3":AUTO_BG,fontWeight:700,color:isRef?"#92400e":"#475569",fontSize:11}},isRef?"REF":i),
+                  h("td",{style:isR1?(isRef?tdR:tdI):tdLocked},isR1?h(DatePicker,{value:shared.calibrationDate,onChange:val=>updateShared(i,"calibrationDate",val),placeholder:isRef?"Base date":"DD/MM/YYYY"}):(shared.calibrationDate||"\u2014")),
+                  h("td",{style:isRef?tdR:tdI},
+                    h("div",{style:{display:"flex",alignItems:"center"}},
+                      h("input",{style:{...inp,flex:1},type:"number",step:"any",value:rrow.nominalValue,onChange:e=>updateRangeRow(activeRange,i,"nominalValue",e.target.value),placeholder:"0."+"0".repeat(dec)}),
+                      h("span",{style:{fontSize:10,color:"#94a3b8",whiteSpace:"nowrap",paddingRight:2}},unit)
+                    ),
+                    rrow.nominalValue!==""&&!isNaN(parseFloat(rrow.nominalValue))&&h("div",{style:{fontSize:10,color:"#334155",textAlign:"right",paddingRight:2,fontWeight:600}},Number(rrow.nominalValue).toFixed(dec)+" "+unit)
+                  ),
+                  h("td",{style:isRef?tdR:tdI},
+                    h("div",{style:{display:"flex",alignItems:"center"}},
+                      h("input",{style:{...inp,flex:1},type:"number",step:"any",value:rrow.measuredValue,onChange:e=>updateRangeRow(activeRange,i,"measuredValue",e.target.value),placeholder:"0."+"0".repeat(dec)}),
+                      h("span",{style:{fontSize:10,color:"#94a3b8",whiteSpace:"nowrap",paddingRight:2}},unit)
+                    ),
+                    rrow.measuredValue!==""&&!isNaN(parseFloat(rrow.measuredValue))&&h("div",{style:{fontSize:10,color:"#1e40af",textAlign:"right",paddingRight:2,fontWeight:600}},Number(rrow.measuredValue).toFixed(dec)+" "+unit)
+                  ),
+                  h("td",{style:{...tdA,color:"#1e40af",fontStyle:"italic",fontSize:11}},isRef?"\u2014":prevVal!==""?prevVal+" "+unit:"\u2014"),
+                  h("td",{style:isR1?tdI:tdLocked},isR1?h("input",{style:inp,type:"number",step:"0.01",value:shared.timeInterval,onChange:e=>updateShared(i,"timeInterval",e.target.value)}):(shared.timeInterval||"\u2014")),
+                  h("td",{style:tdI},h("select",{style:sel,value:rrow.adjustment,onChange:e=>updateRangeRow(activeRange,i,"adjustment",e.target.value)},h("option",{value:""},"\u2014"),h("option",{value:"0"},"0"),h("option",{value:"1"},"1"))),
+                  h("td",{style:{...tdA,color:driftCol}},isRef?"\u2014":calc.drift!==null?fmt(calc.drift,dec):"\u2014"),
+                  h("td",{style:tdA},isRef?"\u2014":calc.driftPerYear!==null?fmt(calc.driftPerYear,dec):"\u2014"),
+                  h("td",{style:tdI},
+                    h("div",null,
+                      h("div",{style:{display:"flex",alignItems:"center"}},
+                        h("input",{style:{...inp,flex:1},type:"number",step:"any",value:rrow.tolerance,onChange:e=>updateRangeRow(activeRange,i,"tolerance",e.target.value),placeholder:"0."+"0".repeat(range.tolDecimals)}),
+                        h("span",{style:{fontSize:9,color:"#7c3aed",whiteSpace:"nowrap",paddingRight:2,fontWeight:700}},(range.tolPrefix||"")+range.quantity)
+                      ),
+                      rrow.tolerance!==""&&!isNaN(parseFloat(rrow.tolerance))&&h("div",{style:{fontSize:10,color:"#7c3aed",textAlign:"right",paddingRight:2,fontWeight:600}},Number(rrow.tolerance).toFixed(range.tolDecimals)+" "+(range.tolPrefix||"")+range.quantity)
+                    )
+                  ),
+                  h("td",{style:tdI},
+                    h("div",null,
+                      h("div",{style:{display:"flex",alignItems:"center"}},
+                        h("input",{style:{...inp,flex:1},type:"number",step:"any",value:rrow.uncertainty,onChange:e=>updateRangeRow(activeRange,i,"uncertainty",e.target.value),placeholder:"0."+"0".repeat(range.uncDecimals)}),
+                        h("span",{style:{fontSize:9,color:"#b45309",whiteSpace:"nowrap",paddingRight:2,fontWeight:700}},(range.uncPrefix||"")+range.quantity)
+                      ),
+                      rrow.uncertainty!==""&&!isNaN(parseFloat(rrow.uncertainty))&&h("div",{style:{fontSize:10,color:"#b45309",textAlign:"right",paddingRight:2,fontWeight:600}},Number(rrow.uncertainty).toFixed(range.uncDecimals)+" "+(range.uncPrefix||"")+range.quantity)
+                    )
+                  ),
+                  h("td",{style:{...tdA,color:turCol,fontWeight:700}},fmt(calc.tur,2)),
+                  h("td",{style:isR1?tdI:tdLocked},isR1?h("select",{style:sel,value:shared.duration,onChange:e=>updateShared(i,"duration",e.target.value)},h("option",{value:""},"\u2014 \u05d1\u05d7\u05e8 \u2014"),...DUR_OPTS.map(o=>h("option",{key:o.v,value:o.v},o.label))):(shared.duration?(DUR_OPTS.find(o=>String(o.v)===String(shared.duration))||{label:shared.duration}).label:"\u2014")),
+                  h("td",{style:isR1?tdI:tdLocked},isR1?h("select",{style:sel,value:shared.frequency,onChange:e=>updateShared(i,"frequency",e.target.value)},h("option",{value:""},"\u2014 \u05d1\u05d7\u05e8 \u2014"),...FRQ_OPTS.map(o=>h("option",{key:o.v,value:o.v},o.label))):(shared.frequency?(FRQ_OPTS.find(o=>String(o.v)===String(shared.frequency))||{label:shared.frequency}).label:"\u2014")),
+                  h("td",{style:isR1?tdI:tdLocked},isR1?h("select",{style:sel,value:shared.environment,onChange:e=>updateShared(i,"environment",e.target.value)},h("option",{value:""},"\u2014 \u05d1\u05d7\u05e8 \u2014"),...envOpts.map(o=>h("option",{key:o.v,value:o.v},o.label))):(shared.environment?(envOpts.find(o=>String(o.v)===String(shared.environment))||{label:shared.environment}).label:"\u2014")),
+                  h("td",{style:{...tdA,color:calc.usageScore!==null&&calc.usageScore>2?FAIL_RED:PASS_GREEN,fontWeight:600}},calc.usageScore!==null?calc.usageScore:"\u2014"),
+                  h("td",{style:{...tdA,color:calc.riskScore!==null&&calc.riskScore>2?FAIL_RED:PASS_GREEN,fontWeight:600}},calc.riskScore!==null?calc.riskScore:"\u2014"),
+                  h("td",{style:{...tdA,fontWeight:800,fontSize:12,color:calc.exceedOk===false?FAIL_RED:calc.exceedOk===true?PASS_GREEN:"#94a3b8",background:(calc.exceedOk===false)?"#fee2e2":undefined}},
+                    calc.exceedOk===null?"\u2014":calc.exceedOk?"OK":"\u2717"
+                  ),
+                  h("td",{style:{...tdA,color:decCol,fontWeight:800,fontSize:13}},calc.decision||"\u2014"),
+                  h("td",{style:isR1?(isRef?tdR:tdI):tdLocked},isR1?h("input",{style:{...inp,minWidth:80},value:shared.certNo,onChange:e=>updateShared(i,"certNo",e.target.value),placeholder:"Cert #"}):(shared.certNo||"\u2014")),
+                  h("td",{style:{...tdA,padding:"4px"}},!isRef&&sharedRows.length>3&&h("button",{onClick:()=>removeSharedRow(i),style:{background:"transparent",border:"none",color:"#94a3b8",cursor:"pointer",fontSize:14}},"\u2715"))
+                );
+              })
+            )
+          )
+        ),
+
+        // Bottom verdict (VER 2.10: combined rows + drift prediction, dynamic year text)
+        verdictReady&&h("div",{style:{marginTop:16,borderRadius:10,padding:"14px 18px",background:extensionApproved?"#f0fdf4":"#fef2f2",border:"2px solid "+(extensionApproved?"#86efac":"#fca5a5")}},
+          h("div",{style:{fontSize:15,fontWeight:800,color:extensionApproved?PASS_GREEN:FAIL_RED,marginBottom:8}},extensionApproved?("\u2713 Extension approved \u2013 Calibration interval may be extended by "+yearsText):"\u2717 Extension not approved \u2013 Calibration required at standard interval"),
+          h("div",{style:{display:"flex",flexWrap:"wrap",gap:8}},
+            ranges.map((rng,ri)=>h("div",{key:rng.id,onClick:()=>setActiveRange(ri),style:{padding:"4px 12px",borderRadius:20,fontSize:12,fontWeight:700,cursor:"pointer",background:rangePassStatus[ri]==="pass"?"#dcfce7":rangePassStatus[ri]==="fail"?"#fee2e2":"#f1f5f9",color:sc(rangePassStatus[ri]),border:"1px solid "+(rangePassStatus[ri]==="pass"?"#86efac":rangePassStatus[ri]==="fail"?"#fca5a5":"#e2e8f0")}},rng.label+" ["+unitOf(rng)+"]: "+sl(rangePassStatus[ri])))
+          )
+        ),
+
+        // ── VER 2.7: Tnext selector + Drift Prediction (Stage C) ──────────────
+        h("div",{style:{marginTop:16,borderRadius:12,border:"2px solid #6366f1",background:"#eef2ff",padding:"16px 20px"}},
+          h("div",{style:{fontSize:14,fontWeight:800,color:"#4338ca",marginBottom:4}},"\u05d7\u05d9\u05d6\u05d5\u05d9 \u05e1\u05d7\u05e3 \u05dc\u05ea\u05e7\u05d5\u05e4\u05ea \u05d4\u05d0\u05e8\u05db\u05d4 \u2013 Drift Prediction"),
+          h("div",{style:{fontSize:11,color:"#4b5563",marginBottom:12}},"\u05d4\u05ea\u05e0\u05d0\u05d9 \u05d4\u05e1\u05d5\u05e4\u05d9: |Measured \u2212 Nominal| + DriftPredicted + Uncertainty \u2264 Tolerance"),
+          // Tnext selector
+          h("div",{style:{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",marginBottom:14,paddingBottom:14,borderBottom:"1px solid #c7d2fe"}},
+            h("span",{style:{fontSize:13,fontWeight:700,color:"#3730a3"}},"Tnext \u2013 \u05ea\u05e7\u05d5\u05e4\u05ea \u05d4\u05d0\u05e8\u05db\u05d4 \u05d4\u05de\u05d1\u05d5\u05e7\u05e9\u05ea:"),
+            h("button",{onClick:()=>tNextMax>=1&&setTNext("1"),disabled:tNextMax===0||tNextMax===null,style:{padding:"8px 20px",borderRadius:8,border:"2px solid",borderColor:tNextNum===1?"#4338ca":"#c7d2fe",background:tNextNum===1?"#4338ca":"#fff",color:tNextNum===1?"#fff":(tNextMax>=1?"#4338ca":"#c7d2fe"),fontWeight:700,fontSize:13,cursor:(tNextMax>=1)?"pointer":"not-allowed",opacity:(tNextMax>=1)?1:0.5}},"\u05e9\u05e0\u05d4 \u05d0\u05d7\u05ea (1)"),
+            h("button",{onClick:()=>tNextMax>=2&&setTNext("2"),disabled:tNextMax<2||tNextMax===null,style:{padding:"8px 20px",borderRadius:8,border:"2px solid",borderColor:tNextNum===2?"#4338ca":"#c7d2fe",background:tNextNum===2?"#4338ca":"#fff",color:tNextNum===2?"#fff":(tNextMax>=2?"#4338ca":"#c7d2fe"),fontWeight:700,fontSize:13,cursor:(tNextMax>=2)?"pointer":"not-allowed",opacity:(tNextMax>=2)?1:0.5}},"\u05e9\u05e0\u05ea\u05d9\u05d9\u05dd (2)"),
+            tNext!==""&&h("button",{onClick:()=>setTNext(""),style:{padding:"8px 14px",borderRadius:8,border:"1px solid #e2e8f0",background:"#f8fafc",color:"#94a3b8",fontSize:12,cursor:"pointer"}},"\u05e0\u05e7\u05d4"),
+            maxTI!==null&&h("span",{style:{fontSize:11,color:"#6b7280",marginLeft:"auto"}},"Time Interval \u05de\u05e8\u05d1\u05d9: "+maxTI+" \u05e9\u05e0\u05d4/\u05d9\u05dd")
+          ),
+          // Tnext constraint messages
+          tNextInvalid&&tNextMax!==0&&tNextMax!==null&&h("div",{style:{marginBottom:12,padding:"10px 14px",background:"#fff7ed",border:"2px solid #f97316",borderRadius:8,fontSize:12,color:"#9a3412",fontWeight:700}},"\u26a0 \u05d4\u05d1\u05d7\u05d9\u05e8\u05d4 \u05d4\u05e7\u05d5\u05d3\u05de\u05ea \u05d0\u05d9\u05e0\u05d4 \u05ea\u05e7\u05e4\u05d4 \u05e2\u05d5\u05d3 \u2013 Time Interval \u05d4\u05e9\u05ea\u05e0\u05d4. \u05d9\u05e9 \u05dc\u05d1\u05d7\u05d5\u05e8 \u05de\u05d7\u05d3\u05e9 \u05d0\u05ea \u05ea\u05e7\u05d5\u05e4\u05ea \u05d4\u05d4\u05d0\u05e8\u05db\u05d4."),
+          tNextMax===0&&h("div",{style:{marginBottom:12,padding:"10px 14px",background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:8,fontSize:12,color:"#991b1b",fontWeight:700}},"\u2717 Time Interval \u05de\u05e2\u05dc \u05e9\u05e0\u05ea\u05d9\u05d9\u05dd \u2013 \u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05d4\u05d0\u05e8\u05d9\u05da \u05ea\u05d5\u05e7\u05e3 \u05db\u05dc\u05dc"),
+          tNextMax===1&&h("div",{style:{marginBottom:12,padding:"10px 14px",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:8,fontSize:12,color:"#92400e"}},"\u26a0 Time Interval \u05de\u05e2\u05dc \u05e9\u05e0\u05d4 \u05d5\u05e2\u05d3 \u05e9\u05e0\u05ea\u05d9\u05d9\u05dd \u2013 \u05e0\u05d9\u05ea\u05df \u05dc\u05d4\u05d0\u05e8\u05d9\u05da \u05e9\u05e0\u05d4 \u05d0\u05d7\u05ea \u05d1\u05dc\u05d1\u05d3"),
+          // Per-range Stage C results
+          h("div",{style:{display:"flex",flexDirection:"column",gap:10}},
+            ranges.map((rng,ri)=>{
+              const pred=rangePredictions[ri];
+              let statusColor="#94a3b8",statusText="\u2014 \u05de\u05de\u05ea\u05d9\u05df \u05dc\u05e0\u05ea\u05d5\u05e0\u05d9\u05dd",statusBg="#f8fafc";
+              let detail=null;
+              if(pred.reason==="need_more"){statusText="\u05d7\u05e1\u05e8\u05d4 \u05ea\u05e2\u05d5\u05d3\u05d4 \u2013 \u05e0\u05d3\u05e8\u05e9\u05d5\u05ea \u05dc\u05e4\u05d7\u05d5\u05ea 3 \u05ea\u05e2\u05d5\u05d3\u05d5\u05ea";statusColor="#b45309";statusBg="#fffbeb";}
+              else if(pred.reason==="too_many"){statusText="\u05d9\u05d5\u05ea\u05e8 \u05de\u05d3\u05d9 \u05ea\u05e2\u05d5\u05d3\u05d5\u05ea (\u05de\u05e7\u05e1\u05d9\u05de\u05d5\u05dd 5)";statusColor="#b45309";statusBg="#fffbeb";}
+              else if(pred.reason==="incomplete"){statusText="\u05de\u05de\u05ea\u05d9\u05df \u05dc-Tnext \u05d5\u05dc\u05e0\u05ea\u05d5\u05e0\u05d9\u05dd \u05de\u05dc\u05d0\u05d9\u05dd";statusColor="#94a3b8";statusBg="#f8fafc";}
+              else if(pred.ok===true){statusText="\u2713 \u05e2\u05d5\u05d1\u05e8 \u2013 \u05d4\u05e1\u05d7\u05e3 \u05d4\u05e6\u05e4\u05d5\u05d9 \u05d1\u05ea\u05d5\u05da \u05d4\u05d8\u05d5\u05dc\u05e8\u05e0\u05e1";statusColor=PASS_GREEN;statusBg="#f0fdf4";}
+              else if(pred.ok===false){statusText="\u2717 \u05e0\u05db\u05e9\u05dc \u2013 \u05d4\u05e1\u05d7\u05e3 \u05d4\u05e6\u05e4\u05d5\u05d9 \u05d7\u05d5\u05e8\u05d2 \u05de\u05d4\u05d8\u05d5\u05dc\u05e8\u05e0\u05e1";statusColor=FAIL_RED;statusBg="#fef2f2";}
+              if(pred.annualRate!==undefined&&pred.annualRate!==null){
+                // VER 2.12: show the method + exact formula used, per certificate count
+                const nC=pred.nCerts;
+                // VER 2.15: show 2 extra decimals in the prediction panel so the exact math is visible
+                const predDec=Math.min(rng.decimals+2,8);
+                let methodName="",methodFormula="";
+                if(nC===3){methodName="MAX method";methodFormula="AnnualRate = max(|D\u2081|, |D\u2082|)";}
+                else if(nC===4){methodName="SYD model";methodFormula="AnnualRate = 0.167\u00b7|D\u2081| + 0.333\u00b7|D\u2082| + 0.500\u00b7|D\u2083|";}
+                else if(nC===5){methodName="SYD model";methodFormula="AnnualRate = 0.10\u00b7|D\u2081| + 0.20\u00b7|D\u2082| + 0.30\u00b7|D\u2083| + 0.40\u00b7|D\u2084|";}
+                detail=h("div",{style:{fontSize:11,color:"#4b5563",fontFamily:"monospace",marginTop:6,lineHeight:1.8}},
+                  methodName?h("span",{style:{fontWeight:700,color:"#4338ca",fontFamily:"'Segoe UI',Arial,sans-serif"}},"\u05e9\u05d9\u05d8\u05ea \u05d7\u05d9\u05e9\u05d5\u05d1 ("+nC+" \u05ea\u05e2\u05d5\u05d3\u05d5\u05ea): "+methodName):null,
+                  methodName?h("br"):null,
+                  methodFormula?methodFormula:null,
+                  methodFormula?h("br"):null,
+                  "AnnualRate = "+fmt(pred.annualRate,predDec)+" ("+pred.nCerts+" certs, "+(pred.nCerts-1)+" drifts)",
+                  pred.driftPredicted!==undefined?h("br"):null,
+                  pred.driftPredicted!==undefined?"DriftPredicted = "+fmt(pred.annualRate,predDec)+" \u00d7 "+pred.yearsFactor+" (Tnext="+pred.tNext+"+1) = "+fmt(pred.driftPredicted,predDec):null,
+                  pred.lhs!==undefined?h("br"):null,
+                  pred.lhs!==undefined?"|M\u2212N| + DriftPred + U = "+fmt(pred.lhs,predDec)+" "+(pred.ok?"\u2264":">")+" Tolerance = "+fmt(pred.tolerance,predDec):null
+                );
+              }
+              return h("div",{key:rng.id,style:{padding:"12px 16px",borderRadius:10,background:statusBg,border:"1.5px solid "+statusColor}},
+                h("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}},
+                  h("span",{style:{fontSize:13,fontWeight:700,color:"#0f172a"}},rng.label+" ["+unitOf(rng)+"]"),
+                  h("span",{style:{fontSize:12,fontWeight:800,color:statusColor}},statusText)
+                ),
+                detail
+              );
+            })
+          )
+        ),
+
+        // Reference tables
+        h("div",{style:{marginTop:18,display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}},
+          h("div",{style:{background:"#fff",border:"1px solid #e2e8f0",borderRadius:10,padding:"14px 16px"}},
+            h("div",{style:{fontWeight:700,fontSize:12,color:"#0f172a",marginBottom:10,borderBottom:"1px solid #e2e8f0",paddingBottom:6}},"Formulas"),
+            [["Drift","Measured Value \u2212 Previous Value"],["Drift per Year","Drift \u00f7 Time Interval"],["TUR","Tolerance \u00f7 Uncertainty"],["Usage score (1-5)","(Duration + Frequency) \u00f7 2 [rounded]"],["Risk score (1-5)","(Usage score + Environment) \u00f7 2 [rounded]"]].map(function(kv){return h("div",{key:kv[0],style:{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid #f8fafc",fontSize:11}},h("span",{style:{fontWeight:600,color:"#334155"}},kv[0]),h("span",{style:{color:"#64748b",fontFamily:"monospace"}},kv[1]))})
+          ),
+          h("div",{style:{background:"#fff",border:"1px solid #e2e8f0",borderRadius:10,padding:"14px 16px"}},
+            h("div",{style:{fontWeight:700,fontSize:12,color:"#0f172a",marginBottom:10,borderBottom:"1px solid #e2e8f0",paddingBottom:6}},"Decision rule: FAIL if ANY condition"),
+            ["ADJUSTMENT = 1","TUR < 3","Environment > 2","Usage score > 2","Risk score > 2","|Measured \u2212 Nominal| + Uncertainty \u2265 Tolerance"].map(function(c){return h("div",{key:c,style:{display:"flex",alignItems:"center",gap:6,padding:"4px 0",borderBottom:"1px solid #f8fafc",fontSize:11}},h("span",{style:{color:FAIL_RED,fontWeight:700}},"\u2717"),h("span",{style:{fontFamily:"monospace",color:"#334155"}},c))})
+          )
+        ),
+        h("div",{style:{marginTop:12,background:"#fff",border:"1px solid #e2e8f0",borderRadius:10,padding:"12px 16px",fontSize:11,color:"#64748b"}},
+          h("strong",{style:{color:"#0f172a"}},"Methodological Basis \u00b7 "),
+          "ISO/IEC 17025:2017 (Clauses 6.4.7, 7.6, 7.7, 7.8.6) \u00b7 ILAC G24 / OIML D10 \u00b7 JCGM 100 (GUM)",
+          h("span",{style:{color:"#94a3b8",fontStyle:"italic"}}," \u00b7 'Usage score' and 'risk index' are internal engineering tools not explicitly defined in the above standards.")
+        )
+      )
+    )
+  );
+}
+
+const root=ReactDOM.createRoot(document.getElementById("root"));
+root.render(React.createElement(App));
+</script>
+</body>
+</html>
